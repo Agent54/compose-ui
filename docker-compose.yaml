@@ -1,0 +1,23 @@
+name: dev # docker compose --project-name "$(basename "$PWD")" up
+
+services:
+  MYNAME:
+    build: .
+    environment:
+      - NODE_ENV=development
+    develop:
+      watch:
+        - action: sync
+          path: ./src
+          target: /app/src
+  
+        - action: rebuild
+          path: ./package.json
+        - action: rebuild
+          path: ./deno.lock
+        - action: rebuild
+          path: ./svelte.config.js
+        - action: rebuild
+          path: ./vite.config.ts
+        - action: rebuild
+          path: ./Dockerfile
