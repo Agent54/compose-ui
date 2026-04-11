@@ -4,14 +4,18 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"dev": "deno run --allow-env --allow-read --allow-sys --allow-write=./,/tmp --allow-ffi --allow-net npm:vite dev",
-		"build": "deno run npm:vite build",
-		"preview": "deno run npm:vite preview",
-		"prepare": "deno run npm:svelte-kit sync || echo ''",
-		"check": "deno run npm:svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "deno run npm:svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"dev": "deno run --allow-env --allow-read --allow-sys --allow-write=./,/tmp --allow-ffi --allow-net --allow-run npm:vite dev",
+		"build": "deno run --allow-env --allow-read --allow-sys --allow-write=./,/tmp --allow-ffi --allow-net --allow-run npm:vite build",
+		"preview": "deno run --allow-env --allow-read --allow-sys --allow-write=./,/tmp --allow-ffi --allow-net --allow-run npm:vite preview",
+		"prepare": "deno run --allow-env --allow-read --allow-sys --allow-write=./,/tmp --allow-ffi --allow-net --allow-run npm:@sveltejs/kit sync || echo ''",
+		"check": "deno run --allow-env --allow-read --allow-sys --allow-write=./,/tmp --allow-ffi --allow-net --allow-run npm:@sveltejs/kit sync && deno run --allow-env --allow-read --allow-sys --allow-write=./,/tmp --allow-ffi --allow-net --allow-run npm:svelte-check --tsconfig ./tsconfig.json",
+		"check:watch": "deno run --allow-env --allow-read --allow-sys --allow-write=./,/tmp --allow-ffi --allow-net --allow-run npm:@sveltejs/kit sync && deno run --allow-env --allow-read --allow-sys --allow-write=./,/tmp --allow-ffi --allow-net --allow-run npm:svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "deno run npm:prettier --check . && eslint .",
 		"format": "deno run npm:prettier --write ."
+	},
+	"dependencies": {
+		"@tanstack/db": "latest",
+		"@tanstack/svelte-db": "latest"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.3",
