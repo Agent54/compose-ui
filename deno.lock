@@ -11,6 +11,8 @@
     "npm:@tailwindcss/typography@~0.5.19": "0.5.19_tailwindcss@4.2.2",
     "npm:@tailwindcss/vite@^4.1.18": "4.2.2_vite@7.3.2__@types+node@24.12.2_@types+node@24.12.2",
     "npm:@tanstack/db@latest": "0.6.2_typescript@5.9.3",
+    "npm:@tanstack/query-core@latest": "5.96.2",
+    "npm:@tanstack/query-db-collection@latest": "1.0.33_@tanstack+query-core@5.96.2_typescript@5.9.3",
     "npm:@tanstack/svelte-db@latest": "0.1.79_svelte@5.55.1_typescript@5.9.3",
     "npm:@types/node@24": "24.12.2",
     "npm:eslint-config-prettier@^10.1.8": "10.1.8_eslint@10.2.0",
@@ -582,6 +584,18 @@
     },
     "@tanstack/pacer-lite@0.2.1": {
       "integrity": "sha512-3PouiFjR4B6x1c969/Pl4ZIJleof1M0n6fNX8NRiC9Sqv1g06CVDlEaXUR4212ycGFyfq4q+t8Gi37Xy+z34iQ=="
+    },
+    "@tanstack/query-core@5.96.2": {
+      "integrity": "sha512-hzI6cTVh4KNRk8UtoIBS7Lv9g6BnJPXvBKsvYH1aGWvv0347jT3BnSvztOE+kD76XGvZnRC/t6qdW1CaIfwCeA=="
+    },
+    "@tanstack/query-db-collection@1.0.33_@tanstack+query-core@5.96.2_typescript@5.9.3": {
+      "integrity": "sha512-irofWH0nQk2b5eUO5LqTw4qbDnxV1li/w5Yg1/cGiWXx32BnqN1nkayPPQ35xx7rOAH/iujYhqiJIFSknnYvzA==",
+      "dependencies": [
+        "@standard-schema/spec",
+        "@tanstack/db",
+        "@tanstack/query-core",
+        "typescript"
+      ]
     },
     "@tanstack/svelte-db@0.1.79_svelte@5.55.1_typescript@5.9.3": {
       "integrity": "sha512-mfgGk3eai22tukkm3pLQvm75VF+1mO944sxan8bXhPqhGS9C7Yioif7MBN6Z94pnlSCLEv2Xe65En7BvjWUyJg==",
@@ -1561,6 +1575,8 @@
         "npm:@tailwindcss/typography@~0.5.19",
         "npm:@tailwindcss/vite@^4.1.18",
         "npm:@tanstack/db@latest",
+        "npm:@tanstack/query-core@latest",
+        "npm:@tanstack/query-db-collection@latest",
         "npm:@tanstack/svelte-db@latest",
         "npm:@types/node@24",
         "npm:eslint-config-prettier@^10.1.8",

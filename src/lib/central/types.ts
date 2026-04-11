@@ -31,7 +31,7 @@ export type ComposeProject = {
 	id: string;
 	name: string;
 	path: string;
-	state: 'running' | 'exited' | 'uncreated' | 'stopped';
+	state: 'running' | 'exited' | 'uncreated' | 'stopped' | 'paused';
 	statusLabel: string;
 	containerCount: number;
 	watch: boolean;
@@ -43,8 +43,9 @@ export type ComposeService = {
 	id: string;
 	projectId: string;
 	name: string;
+	serviceName: string;
 	containerName: string;
-	state: 'running' | 'exited';
+	state: 'running' | 'exited' | 'paused' | 'created' | 'unknown';
 	stateText: string;
 	health?: 'healthy' | 'unhealthy';
 };

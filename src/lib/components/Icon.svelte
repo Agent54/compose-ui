@@ -2,6 +2,7 @@
 	type IconName =
 		| 'chevron'
 		| 'container'
+		| 'pause'
 		| 'play'
 		| 'refresh'
 		| 'search'
@@ -16,7 +17,7 @@
 	let {
 		name,
 		size = 14,
-		stroke = 1.85,
+		stroke = 2,
 		rotated = false,
 		spinning = false,
 		class: className = ''
@@ -51,6 +52,9 @@
 		<path d="M12 11v9" />
 	{:else if name === 'play'}
 		<path d="m8 6 10 6-10 6z" />
+	{:else if name === 'pause'}
+		<path d="M8 6v12" />
+		<path d="M16 6v12" />
 	{:else if name === 'refresh'}
 		<path d="M20 11a8 8 0 0 0-13.66-5.66" />
 		<path d="M4 4v5h5" />

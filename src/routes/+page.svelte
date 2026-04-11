@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { eq, inArray } from '@tanstack/db';
 	import { useLiveQuery } from '@tanstack/svelte-db';
 	import { onMount } from 'svelte';
 
@@ -8,48 +9,75 @@
 		checkHealth,
 		type ComposeProject,
 		type ComposeService,
+		type LocalSettings,
 		type LogEntry,
 		type UiState,
 		hydrateProjects,
+		invalidateProjectServices,
 		logsCollection,
+		pauseServices,
 		projectsCollection,
 		refreshProjectsFromServer,
+		reloadProjectServices,
 		selectProject,
 		settingsCollection,
 		servicesCollection,
 		setConnectionState,
 		setProjectExpanded,
-		setProjectState,
 		setProjectWatch,
 		startProject,
+		startServices,
 		startWatch,
 		stopWatch,
 		uiStateCollection,
+		unpauseServices,
 		updateUiState
 	} from '$lib/central';
+
+	type OpenProjectRow = {
+		project: ComposeProject;
+		services: {
+			values: () => IterableIterator<ComposeService>;
+		};
+	};
 
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
 	const settingsQuery = useLiveQuery((q) => q.from({ settings: settingsCollection }));
-	const allServicesQuery = useLiveQuery((q) => q.from({ services: servicesCollection }));
 	const allLogsQuery = useLiveQuery((q) => q.from({ logs: logsCollection }));
 
-	const selectedProjectId = $derived(uiQuery.data?.[0]?.selectedProjectId ?? '');
 	const uiState = $derived((uiQuery.data?.[0] as UiState | undefined) ?? undefined);
-	const settings = $derived(
-		(settingsQuery.data?.[0] as unknown as { id: 'localstorage'; expandedProjectIds: string[] } | undefined) ??
-			undefined
-	);
-	const expandedProjectIds = $derived(new Set(settings?.expandedProjectIds ?? []));
-	const allServices = $derived((allServicesQuery.data ?? []) as ComposeService[]);
+	const selectedProjectId = $derived(uiState?.selectedProjectId ?? '');
+	const settings = $derived((settingsQuery.data?.[0] as LocalSettings | undefined) ?? undefined);
+	const expandedProjectIdList = $derived((settings?.expandedProjectIds ?? []).slice().sort());
+	const expandedProjectIds = $derived(new Set(expandedProjectIdList));
+
+	const openProjectsQuery = useLiveQuery((q) => {
+		const targetIds = expandedProjectIdList.length ? expandedProjectIdList : ['__none__'];
+
+			return q
+				.from({ projects: projectsCollection })
+				.where(({ projects }) => inArray(projects.id, targetIds))
+				.select(({ projects }) => ({
+					project: projects,
+					services: q
+						.from({ services: servicesCollection })
+						.where(({ services }) => eq(services.projectId, projects.id))
+						.orderBy(({ services }) => services.serviceName)
+						.orderBy(({ services }) => services.containerName)
+				}));
+		});
+
 	const allLogs = $derived((allLogsQuery.data ?? []) as LogEntry[]);
+	const openProjectRows = $derived((openProjectsQuery.data ?? []) as OpenProjectRow[]);
 
 	function stateRank(state: ComposeProject['state']) {
 		if (state === 'running') return 0;
-		if (state === 'exited') return 1;
-		if (state === 'stopped') return 2;
-		if (state === 'uncreated') return 3;
-		return 4;
+		if (state === 'paused') return 1;
+		if (state === 'exited') return 2;
+		if (state === 'stopped') return 3;
+		if (state === 'uncreated') return 4;
+		return 5;
 	}
 
 	function compareProjects(
@@ -80,14 +108,16 @@
 	const servicesByProject = $derived.by(() => {
 		const grouped = new Map<string, ComposeService[]>();
 
-		for (const service of allServices) {
-			const current = grouped.get(service.projectId);
-
-			if (current) {
-				current.push(service);
-			} else {
-				grouped.set(service.projectId, [service]);
-			}
+		for (const row of openProjectRows) {
+			const services = [...row.services.values()];
+			grouped.set(
+				row.project.id,
+				services.sort(
+					(left, right) =>
+						left.serviceName.localeCompare(right.serviceName) ||
+						left.containerName.localeCompare(right.containerName)
+				)
+			);
 		}
 
 		return grouped;
@@ -107,10 +137,12 @@
 	});
 
 	const selectedProject = $derived.by(
-		() => projects.find((project) => project.id === selectedProjectId) ?? visibleProjects[0]
+		() => visibleProjects.find((project) => project.id === selectedProjectId) ?? visibleProjects[0]
 	);
 
-	const selectedServices = $derived(selectedProject ? servicesByProject.get(selectedProject.id) ?? [] : []);
+	const selectedServices = $derived(
+		selectedProject ? servicesByProject.get(selectedProject.id) ?? [] : []
+	);
 	const selectedLogs = $derived(
 		selectedProject ? allLogs.filter((entry) => entry.projectId === selectedProject.id).slice().reverse() : []
 	);
@@ -121,6 +153,9 @@
 				? selectedProject.containerCount
 				: 0
 	);
+	const pausedServices = $derived(
+		selectedServices.filter((service) => service.state === 'paused').length
+	);
 	const exitedServices = $derived(
 		selectedServices.length
 			? selectedServices.filter((service) => service.state === 'exited').length
@@ -130,7 +165,7 @@
 	);
 
 	let refreshing = $state(false);
-	let busyAction = $state<'up' | 'watch' | null>(null);
+	let busyAction = $state<string | null>(null);
 
 	$effect(() => {
 		if (!visibleProjects.length) {
@@ -152,6 +187,114 @@
 		void refresh();
 	});
 
+	function projectServices(projectId: string) {
+		return servicesByProject.get(projectId) ?? [];
+	}
+
+	function hasLoadedProjectServices(projectId: string) {
+		return openProjectRows.some((row) => row.project.id === projectId);
+	}
+
+	function isProjectFullyPaused(project: ComposeProject) {
+		const services = projectServices(project.id);
+
+		if (services.length) {
+			return services.every((service) => service.state === 'paused');
+		}
+
+		return project.state === 'paused' || project.statusLabel.toLowerCase().includes('paused');
+	}
+
+	function projectCanPause(project: ComposeProject) {
+		const services = projectServices(project.id);
+
+		if (services.length) {
+			return services.some((service) => service.state === 'running' || service.state === 'paused');
+		}
+
+		return project.state === 'running' || project.state === 'paused';
+	}
+
+	function projectCanStart(project: ComposeProject) {
+		const services = projectServices(project.id);
+
+		if (services.length) {
+			return services.some((service) =>
+				['exited', 'created', 'unknown'].includes(service.state)
+			);
+		}
+
+		return project.state !== 'running' && project.state !== 'paused';
+	}
+
+	function projectIconTone(project: ComposeProject) {
+		const services = projectServices(project.id);
+
+		if (services.length) {
+			const running = services.filter((service) => service.state === 'running').length;
+			const paused = services.filter((service) => service.state === 'paused').length;
+			const exited = services.filter((service) => service.state === 'exited').length;
+
+			if (running > 0 && paused === 0 && exited === 0) {
+				return 'project-icon-running';
+			}
+
+			if (paused > 0 && running === 0 && exited === 0) {
+				return 'project-icon-warning';
+			}
+
+			if (running > 0 || paused > 0) {
+				return 'project-icon-warning';
+			}
+
+			if (exited > 0) {
+				return 'project-icon-exited';
+			}
+		}
+
+		if (project.state === 'running') {
+			return 'project-icon-running';
+		}
+
+		if (project.state === 'uncreated') {
+			return 'project-icon-uncreated';
+		}
+
+		if (project.state === 'paused' || project.statusLabel.toLowerCase().includes('paused')) {
+			return 'project-icon-warning';
+		}
+
+		if (project.statusLabel.includes('running(') && project.statusLabel.includes('exited(')) {
+			return 'project-icon-warning';
+		}
+
+		return 'project-icon-exited';
+	}
+
+	function serviceStateTone(service: ComposeService) {
+		if (service.state === 'running') {
+			return 'service-state-running';
+		}
+
+		if (service.state === 'paused') {
+			return 'service-state-paused';
+		}
+
+		return 'service-state-exited';
+	}
+
+	function serviceStateIcon(service: ComposeService) {
+		if (service.state === 'paused') {
+			return 'pause';
+		}
+
+		if (service.state === 'running') {
+			return 'play';
+		}
+
+		return 'container';
+	}
+
 	async function refresh() {
 		if (!uiState) {
 			return;
@@ -164,6 +307,12 @@
 			await checkHealth(uiState);
 			const result = await refreshProjectsFromServer(uiState);
 			hydrateProjects(result.projects, result.services);
+			invalidateProjectServices();
+
+			if (expandedProjectIdList.length) {
+				await reloadProjectServices(expandedProjectIdList);
+			}
+
 			setConnectionState('connected', 'Compose API reachable and synchronized.');
 
 			if (selectedProjectId) {
@@ -181,21 +330,81 @@
 		}
 	}
 
-	async function handleUp(project = selectedProject) {
+	async function syncAfterAction(project: ComposeProject, logMessage: string) {
+		await refresh();
+
+		if (expandedProjectIds.has(project.id)) {
+			await reloadProjectServices([project.id]);
+		}
+
+		appendLog(project.id, 'ok', logMessage);
+	}
+
+	async function handleStart(project = selectedProject, service?: ComposeService) {
 		if (!project || !uiState || busyAction) {
 			return;
 		}
 
-		busyAction = 'up';
+		const serviceNames = service ? [service.serviceName] : undefined;
+		busyAction = `start:${project.id}:${service?.id ?? 'project'}`;
 
 		try {
-			await startProject(uiState, project.path, project.watch);
-			setProjectState(project.id, 'running');
-			setConnectionState('connected', `Started ${project.name}.`);
-			appendLog(project.id, 'ok', `Started ${project.name} via /up.`);
+			if (service) {
+				await startServices(uiState, project, serviceNames);
+				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name}.`);
+				setConnectionState('connected', `Started ${service.serviceName}.`);
+			} else if (project.state === 'uncreated') {
+				await startProject(uiState, project.path, project.watch);
+				await syncAfterAction(project, `Started ${project.name} via /up.`);
+				setConnectionState('connected', `Started ${project.name}.`);
+			} else {
+				await startServices(uiState, project);
+				await syncAfterAction(project, `Started services for ${project.name}.`);
+				setConnectionState('connected', `Started ${project.name}.`);
+			}
 		} catch {
-			setConnectionState('error', `Failed to start ${project.name} from http://127.0.0.1:8094.`);
-			appendLog(project.id, 'warn', `Failed to start ${project.name}.`);
+			setConnectionState('error', `Failed to start ${service?.serviceName ?? project.name}.`);
+			appendLog(project.id, 'warn', `Failed to start ${service?.serviceName ?? project.name}.`);
+		} finally {
+			busyAction = null;
+		}
+	}
+
+	async function handlePauseToggle(project = selectedProject, service?: ComposeService) {
+		if (!project || !uiState || busyAction) {
+			return;
+		}
+
+		const isUnpause = service ? service.state === 'paused' : isProjectFullyPaused(project);
+		const serviceNames = service ? [service.serviceName] : undefined;
+		busyAction = `${isUnpause ? 'unpause' : 'pause'}:${project.id}:${service?.id ?? 'project'}`;
+
+		try {
+			if (isUnpause) {
+				await unpauseServices(uiState, project, serviceNames);
+				await syncAfterAction(
+					project,
+					`Resumed ${service?.serviceName ?? project.name}.`
+				);
+				setConnectionState('connected', `Resumed ${service?.serviceName ?? project.name}.`);
+			} else {
+				await pauseServices(uiState, project, serviceNames);
+				await syncAfterAction(
+					project,
+					`Paused ${service?.serviceName ?? project.name}.`
+				);
+				setConnectionState('connected', `Paused ${service?.serviceName ?? project.name}.`);
+			}
+		} catch {
+			setConnectionState(
+				'error',
+				`Failed to ${isUnpause ? 'resume' : 'pause'} ${service?.serviceName ?? project.name}.`
+			);
+			appendLog(
+				project.id,
+				'warn',
+				`Failed to ${isUnpause ? 'resume' : 'pause'} ${service?.serviceName ?? project.name}.`
+			);
 		} finally {
 			busyAction = null;
 		}
@@ -207,7 +416,7 @@
 		}
 
 		const nextWatch = !project.watch;
-		busyAction = 'watch';
+		busyAction = `watch:${project.id}`;
 
 		try {
 			if (nextWatch) {
@@ -242,22 +451,9 @@
 		selectProject(projectId);
 	}
 
-	function projectIconTone(project: ComposeProject) {
-		if (project.state === 'running') {
-			return 'project-icon-running';
-		}
-
-		if (project.state === 'uncreated') {
-			return 'project-icon-uncreated';
-		}
-
-		if (project.statusLabel.includes('running(') && project.statusLabel.includes('exited(')) {
-			return 'project-icon-warning';
-		}
-
-		return 'project-icon-exited';
+	function toggleProject(projectId: string) {
+		setProjectExpanded(projectId, !expandedProjectIds.has(projectId));
 	}
-
 </script>
 
 <svelte:head>
@@ -284,7 +480,7 @@
 			</label>
 
 			<label class="sort-menu">
-				<Icon name="sort" size={12} />
+				<Icon name="sort" size={13} />
 				<select
 					value={uiState?.sortBy ?? 'status'}
 					onchange={(event) =>
@@ -306,7 +502,7 @@
 				onmousedown={refresh}
 				disabled={refreshing || busyAction !== null}
 			>
-				<Icon name="refresh" size={12} spinning={refreshing} />
+				<Icon name="refresh" size={13} spinning={refreshing} />
 			</button>
 		</div>
 
@@ -325,15 +521,15 @@
 								type="button"
 								aria-label={expandedProjectIds.has(project.id) ? `Collapse ${project.name}` : `Expand ${project.name}`}
 								aria-pressed={expandedProjectIds.has(project.id)}
-								onmousedown={() => setProjectExpanded(project.id, !expandedProjectIds.has(project.id))}
+								onmousedown={() => toggleProject(project.id)}
 							>
-								<Icon name="chevron" rotated={expandedProjectIds.has(project.id)} />
+								<Icon name="chevron" size={13} rotated={expandedProjectIds.has(project.id)} />
 							</button>
 
 							<button class="project-button" type="button" onmousedown={() => handleProjectSelect(project.id)}>
 								<span class="project-copy">
 									<span class="project-name">
-										<Icon name="container" size={13} class={projectIconTone(project)} />
+										<Icon name="container" size={14} class={projectIconTone(project)} />
 										{project.name}
 									</span>
 									<span class="project-status">{project.statusLabel}</span>
@@ -342,15 +538,30 @@
 							</button>
 
 							<div class="row-actions">
-								<button
-									class="overlay-button"
-									type="button"
-									aria-label={`Up ${project.name}`}
-									onmousedown={() => handleUp(project)}
-									disabled={busyAction !== null}
-								>
-									<Icon name="play" size={11} />
-								</button>
+								{#if projectCanStart(project)}
+									<button
+										class="overlay-button"
+										type="button"
+										aria-label={`Start ${project.name}`}
+										onmousedown={() => handleStart(project)}
+										disabled={busyAction !== null}
+									>
+										<Icon name="play" size={13} />
+									</button>
+								{/if}
+
+								{#if projectCanPause(project)}
+									<button
+										class="overlay-button"
+										type="button"
+										aria-label={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
+										onmousedown={() => handlePauseToggle(project)}
+										disabled={busyAction !== null}
+									>
+										<Icon name={isProjectFullyPaused(project) ? 'play' : 'pause'} size={13} />
+									</button>
+								{/if}
+
 								<button
 									class="overlay-button"
 									type="button"
@@ -358,53 +569,76 @@
 									onmousedown={() => handleWatchToggle(project)}
 									disabled={busyAction !== null}
 								>
-									<Icon name="watch" size={11} />
+									<Icon name="watch" size={13} />
 								</button>
 							</div>
 						</div>
 
-						{#if expandedProjectIds.has(project.id) && (servicesByProject.get(project.id)?.length ?? 0) > 0}
+						{#if expandedProjectIds.has(project.id)}
 							<div class="service-list">
-								{#each servicesByProject.get(project.id) ?? [] as service (service.id)}
-									<div class="service-row">
-										<span class:service-state-running={service.state === 'running'} class="service-state">
-											<Icon name="play" size={11} />
-										</span>
-										<div class="service-copy">
-											<div class="service-title">
-												<span>{service.name}</span>
-												<span class="service-container">{service.containerName}</span>
+								{#if projectServices(project.id).length}
+									{#each projectServices(project.id) as service (service.id)}
+										<div class="service-row">
+											<span class={`service-state ${serviceStateTone(service)}`}>
+												<Icon name={serviceStateIcon(service)} size={13} />
+											</span>
+											<div class="service-copy">
+												<div class="service-title">
+													<span>{service.serviceName}</span>
+													<span class="service-container">{service.containerName}</span>
+												</div>
+												<div class="service-subtitle">
+													{service.stateText}
+													{#if service.health}
+														<span class="health-tag">({service.health})</span>
+													{/if}
+												</div>
 											</div>
-											<div class="service-subtitle">
-												{service.stateText}
-												{#if service.health}
-													<span class="health-tag">({service.health})</span>
-												{/if}
-											</div>
-										</div>
 
-										<div class="row-actions">
-											<button
-												class="overlay-button"
-												type="button"
-												aria-label={`Up ${project.name}`}
-												onmousedown={() => handleUp(project)}
-												disabled={busyAction !== null}
-											>
-												<Icon name="play" size={11} />
-											</button>
-											<button
-												class="overlay-button"
-												type="button"
-												aria-label={`${project.watch ? 'Stop watch for' : 'Watch'} ${project.name}`}
-												onmousedown={() => handleWatchToggle(project)}
-												disabled={busyAction !== null}
-											>
-												<Icon name="watch" size={11} />
-											</button>
+											<div class="row-actions">
+												{#if ['exited', 'created', 'unknown'].includes(service.state)}
+													<button
+														class="overlay-button"
+														type="button"
+														aria-label={`Start ${service.serviceName}`}
+														onmousedown={() => handleStart(project, service)}
+														disabled={busyAction !== null}
+													>
+														<Icon name="play" size={13} />
+													</button>
+												{/if}
+
+												{#if service.state === 'running' || service.state === 'paused'}
+													<button
+														class="overlay-button"
+														type="button"
+														aria-label={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
+														onmousedown={() => handlePauseToggle(project, service)}
+														disabled={busyAction !== null}
+													>
+														<Icon name={service.state === 'paused' ? 'play' : 'pause'} size={13} />
+													</button>
+												{/if}
+
+												<button
+													class="overlay-button"
+													type="button"
+													aria-label={`${project.watch ? 'Stop watch for' : 'Watch'} ${service.serviceName}`}
+													onmousedown={() => handleWatchToggle(project)}
+													disabled={busyAction !== null}
+												>
+													<Icon name="watch" size={13} />
+												</button>
+											</div>
 										</div>
+									{/each}
+								{:else}
+									<div class="service-empty">
+										{hasLoadedProjectServices(project.id)
+											? 'No containers returned by /ps.'
+											: 'Loading containers…'}
 									</div>
-								{/each}
+								{/if}
 							</div>
 						{/if}
 					</div>
@@ -438,7 +672,10 @@
 						<h3>{selectedProject?.path ?? 'http://127.0.0.1:8094'}</h3>
 					</div>
 					<div class="pill-row">
-						<span class:active-pill={selectedProject?.state === 'running'} class="pill">
+						<span
+							class:active-pill={selectedProject?.state === 'running' || (selectedProject ? isProjectFullyPaused(selectedProject) : false)}
+							class="pill"
+						>
 							{selectedProject?.statusLabel ?? 'Unknown'}
 						</span>
 						<span class:active-pill={selectedProject?.watch} class="pill">
@@ -453,16 +690,16 @@
 						<strong>{runningServices}</strong>
 					</div>
 					<div class="metric">
+						<span class="metric-label">Paused</span>
+						<strong>{pausedServices}</strong>
+					</div>
+					<div class="metric">
 						<span class="metric-label">Exited</span>
 						<strong>{exitedServices}</strong>
 					</div>
 					<div class="metric">
 						<span class="metric-label">Watch</span>
 						<strong>{selectedProject?.watch ? 'On' : 'Off'}</strong>
-					</div>
-					<div class="metric">
-						<span class="metric-label">Source</span>
-						<strong>8094</strong>
 					</div>
 				</div>
 
@@ -471,12 +708,16 @@
 						{#each selectedServices as service (service.id)}
 							<div class="compact-row">
 								<div>
-									<div class="row-title">{service.name}</div>
+									<div class="row-title">{service.serviceName}</div>
 									<div class="row-subtitle">{service.containerName}</div>
 								</div>
 								<div class="row-tail">
-									<span class:ok-state={service.state === 'running'} class="state-chip">
-										{service.state === 'running' ? 'Up' : 'Exited'}
+									<span
+										class:ok-state={service.state === 'running'}
+										class:warn-state={service.state === 'paused'}
+										class="state-chip"
+									>
+										{service.state}
 									</span>
 									<span>{service.stateText}</span>
 								</div>
@@ -484,7 +725,11 @@
 						{/each}
 					</div>
 				{:else}
-					<div class="empty-state">No service detail exposed by the API.</div>
+					<div class="empty-state">
+						{selectedProject && expandedProjectIds.has(selectedProject.id)
+							? 'No containers returned by /ps for this project.'
+							: 'Open a project to load its containers.'}
+					</div>
 				{/if}
 			</section>
 
@@ -525,7 +770,7 @@
 		height: 100vh;
 		min-height: 0;
 		grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
-		background: #090a0b;
+		background: #070708;
 		overflow: hidden;
 	}
 
@@ -533,10 +778,10 @@
 		display: flex;
 		min-height: 0;
 		flex-direction: column;
-		border-right: 1px solid rgba(129, 146, 170, 0.16);
+		border-right: 1px solid rgba(255, 255, 255, 0.08);
 		background:
-			linear-gradient(180deg, rgba(17, 17, 18, 0.98), rgba(11, 11, 12, 0.98)),
-			#0a0a0b;
+			linear-gradient(180deg, rgba(14, 14, 15, 0.99), rgba(8, 8, 9, 0.99)),
+			#080809;
 		overflow: hidden;
 	}
 
@@ -570,7 +815,7 @@
 		font-weight: 600;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		color: #8a97a8;
+		color: #8c9197;
 	}
 
 	.pill-row {
@@ -592,16 +837,16 @@
 
 	.refresh-button {
 		display: grid;
-		height: 1.55rem;
-		width: 1.55rem;
+		height: 1.65rem;
+		width: 1.65rem;
 		place-items: center;
-		border-radius: 0.45rem;
-		color: #979b9f;
+		border-radius: 0.48rem;
+		color: #9a9ea3;
 	}
 
 	.refresh-button:hover:enabled {
 		background: rgba(255, 255, 255, 0.06);
-		color: #e5e7ea;
+		color: #ebedf0;
 	}
 
 	.refresh-button:disabled {
@@ -619,16 +864,16 @@
 
 	.toggle {
 		display: grid;
-		height: 1.7rem;
-		width: 1.7rem;
+		height: 1.75rem;
+		width: 1.75rem;
 		place-items: center;
 		border-radius: 0.45rem;
-		color: #90959b;
+		color: #92979d;
 	}
 
 	.toggle:hover {
 		background: rgba(255, 255, 255, 0.06);
-		color: #e2e5e9;
+		color: #e7eaed;
 	}
 
 	.search {
@@ -640,7 +885,7 @@
 		border-radius: 0.6rem;
 		background: rgba(255, 255, 255, 0.03);
 		padding: 0 0.58rem;
-		color: #8f949b;
+		color: #93989e;
 	}
 
 	.search input {
@@ -649,7 +894,7 @@
 		min-height: 0;
 		border: 0;
 		background: transparent;
-		color: #dfe7f2;
+		color: #e4e7ea;
 		padding: 0;
 		line-height: 1;
 		outline: none;
@@ -660,11 +905,11 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.42rem;
-		color: #8f949b;
+		color: #93989e;
 	}
 
 	.sort-menu select {
-		min-width: 7.2rem;
+		min-width: 7.25rem;
 		height: 1.95rem;
 		border: 1px solid rgba(255, 255, 255, 0.08);
 		border-radius: 0.6rem;
@@ -673,7 +918,7 @@
 		font-size: 0.77rem;
 		font-weight: 600;
 		line-height: 1;
-		color: #dfe7f2;
+		color: #e4e7ea;
 		outline: none;
 	}
 
@@ -708,7 +953,7 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.75rem;
-		padding: 0.34rem 0.55rem 0.34rem 0;
+		padding: 0.36rem 0.58rem 0.36rem 0;
 		text-align: left;
 	}
 
@@ -717,37 +962,38 @@
 		min-width: 0;
 		flex-direction: column;
 		align-items: flex-start;
-		gap: 0.06rem;
+		gap: 0.08rem;
 	}
 
 	.project-name {
 		display: inline-flex;
 		min-width: 0;
 		align-items: center;
-		gap: 0.45rem;
+		gap: 0.48rem;
 		font-size: 0.82rem;
 		font-weight: 600;
+		color: #eef0f2;
 	}
 
 	.project-status {
 		font-size: 0.72rem;
-		color: #8fa0b5;
+		color: #989ea6;
 	}
 
 	:global(.project-icon-uncreated) {
-		color: #6d7278;
+		color: #6f747a;
 	}
 
 	:global(.project-icon-running) {
-		color: #6fb67b;
+		color: #70bc7b;
 	}
 
 	:global(.project-icon-warning) {
-		color: #bda36a;
+		color: #c7a45f;
 	}
 
 	:global(.project-icon-exited) {
-		color: #b76f6f;
+		color: #c76a68;
 	}
 
 	.project-meta {
@@ -757,33 +1003,40 @@
 		text-align: right;
 		font-size: 0.72rem;
 		font-weight: 700;
-		color: #7f8da0;
+		color: #848b94;
 		transform: translateX(-6px);
 	}
 
 	.service-list {
 		margin-left: 1.9rem;
-		border-left: 1px solid rgba(107, 121, 141, 0.16);
-		border-left-color: rgba(255, 255, 255, 0.08);
-		padding: 0.08rem 0 0.28rem 0.65rem;
+		border-left: 1px solid rgba(255, 255, 255, 0.08);
+		padding: 0.08rem 0 0.28rem 0.68rem;
 	}
 
 	.service-row {
 		position: relative;
 		display: flex;
-		gap: 0.55rem;
-		padding: 0.19rem 0;
+		gap: 0.58rem;
+		padding: 0.24rem 0;
 		overflow: visible;
 	}
 
 	.service-state {
 		display: inline-flex;
-		padding-top: 0.18rem;
-		color: #c76363;
+		padding-top: 0.16rem;
+		color: #c66c6b;
 	}
 
 	.service-state-running {
-		color: #78c788;
+		color: #73c37f;
+	}
+
+	.service-state-paused {
+		color: #c7a45f;
+	}
+
+	.service-state-exited {
+		color: #c66c6b;
 	}
 
 	.service-copy {
@@ -796,17 +1049,17 @@
 		display: flex;
 		gap: 0.35rem;
 		font-weight: 600;
-		color: #edf3fb;
+		color: #eef0f2;
 	}
 
 	.service-container,
 	.row-subtitle {
-		color: #a5b2c3;
+		color: #a4aab2;
 		font-weight: 500;
 	}
 
 	.service-subtitle {
-		color: #95a2b4;
+		color: #969ca5;
 	}
 
 	.health-tag {
@@ -816,9 +1069,9 @@
 	.row-actions {
 		position: absolute;
 		top: 50%;
-		right: 0.3rem;
+		right: 0.32rem;
 		display: inline-flex;
-		gap: 0.22rem;
+		gap: 0.28rem;
 		transform: translateY(-50%);
 		opacity: 0;
 		pointer-events: none;
@@ -827,28 +1080,27 @@
 	}
 
 	.project-row:hover .row-actions,
-	.project-row:focus-within .row-actions,
-	.service-row:hover .row-actions,
-	.service-row:focus-within .row-actions {
+	.service-row:hover .row-actions {
 		opacity: 1;
 		pointer-events: auto;
 	}
 
 	.overlay-button {
 		display: grid;
-		height: 1.45rem;
-		width: 1.45rem;
+		height: 1.7rem;
+		width: 1.7rem;
 		place-items: center;
-		border-radius: 0.45rem;
-		border: 1px solid rgba(126, 143, 166, 0.16);
-		background: rgba(9, 9, 10, 0.96);
-		color: #c8d3e1;
-		box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+		border-radius: 0.5rem;
+		border: 1px solid rgba(255, 255, 255, 0.11);
+		background: rgba(10, 10, 11, 0.98);
+		color: #d5d9de;
+		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.32);
 	}
 
 	.overlay-button:hover:enabled {
-		border-color: rgba(255, 255, 255, 0.12);
-		background: rgba(24, 24, 26, 0.98);
+		border-color: rgba(255, 255, 255, 0.16);
+		background: rgba(25, 25, 27, 0.99);
+		color: #f2f4f7;
 	}
 
 	.overlay-button:disabled {
@@ -857,18 +1109,25 @@
 	}
 
 	.sidebar-empty,
+	.service-empty,
 	.empty-state {
 		display: grid;
 		place-items: center;
 		border-radius: 0.8rem;
 		background: rgba(255, 255, 255, 0.015);
 		font-size: 0.8rem;
-		color: #98a7bb;
+		color: #9aa1aa;
 	}
 
 	.sidebar-empty {
 		margin: 0 0.55rem;
 		min-height: 8rem;
+	}
+
+	.service-empty {
+		margin-right: 0.5rem;
+		min-height: 2.3rem;
+		font-size: 0.74rem;
 	}
 
 	.panel {
@@ -881,7 +1140,7 @@
 
 	.panel-header {
 		padding-bottom: 0.95rem;
-		border-bottom: 1px solid rgba(123, 141, 164, 0.14);
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 	}
 
 	.panel-heading {
@@ -895,15 +1154,15 @@
 		align-items: center;
 		gap: 0.5rem;
 		font-size: 0.8rem;
-		color: #96a4b6;
+		color: #9aa1aa;
 	}
 
 	.status-dot {
 		height: 0.5rem;
 		width: 0.5rem;
 		border-radius: 999px;
-		background: #d7a45b;
-		box-shadow: 0 0 0 0.16rem rgba(215, 164, 91, 0.15);
+		background: #d1a15f;
+		box-shadow: 0 0 0 0.16rem rgba(209, 161, 95, 0.15);
 	}
 
 	.status-dot.connected {
@@ -932,11 +1191,11 @@
 		display: flex;
 		min-height: 0;
 		flex-direction: column;
-		border: 1px solid rgba(120, 138, 162, 0.16);
+		border: 1px solid rgba(255, 255, 255, 0.08);
 		border-radius: 0.95rem;
 		background:
-			linear-gradient(180deg, rgba(18, 18, 19, 0.96), rgba(12, 12, 13, 0.98)),
-			#0d0d0e;
+			linear-gradient(180deg, rgba(17, 17, 18, 0.97), rgba(11, 11, 12, 0.99)),
+			#0b0b0c;
 		padding: 0.95rem 1rem;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 	}
@@ -951,17 +1210,22 @@
 
 	.pill {
 		border-radius: 999px;
-		background: rgba(86, 101, 120, 0.16);
+		background: rgba(255, 255, 255, 0.06);
 		padding: 0.28rem 0.56rem;
 		font-size: 0.73rem;
 		font-weight: 700;
-		color: #91a3b8;
+		color: #9fa6af;
 	}
 
 	.active-pill,
 	.ok-state {
-		color: #c8f4d2;
+		color: #d4f0da;
 		background: rgba(61, 136, 88, 0.18);
+	}
+
+	.warn-state {
+		color: #f1ddbb;
+		background: rgba(164, 126, 67, 0.18);
 	}
 
 	.metrics {
@@ -980,7 +1244,7 @@
 	.metric-label,
 	.log-hint {
 		font-size: 0.75rem;
-		color: #94a3b8;
+		color: #9aa1aa;
 	}
 
 	.metric strong {
@@ -988,6 +1252,7 @@
 		margin-top: 0.2rem;
 		font-size: 1.1rem;
 		font-weight: 700;
+		color: #edf0f3;
 	}
 
 	.compact-list,
@@ -1015,7 +1280,7 @@
 		align-items: center;
 		gap: 0.55rem;
 		font-size: 0.77rem;
-		color: #9aacbf;
+		color: #a3aab3;
 	}
 
 	.state-chip {
@@ -1025,8 +1290,8 @@
 		font-weight: 700;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
-		background: rgba(123, 84, 84, 0.2);
-		color: #ffb6b6;
+		background: rgba(126, 74, 74, 0.22);
+		color: #ffc0bf;
 	}
 
 	.log-row {
@@ -1051,8 +1316,8 @@
 	}
 
 	.log-info {
-		background: rgba(71, 101, 148, 0.18);
-		color: #b7ceee;
+		background: rgba(255, 255, 255, 0.08);
+		color: #ccd2d8;
 	}
 
 	.log-warn {
@@ -1062,12 +1327,12 @@
 
 	.log-time {
 		width: 3rem;
-		color: #8293a7;
+		color: #848c95;
 		font-variant-numeric: tabular-nums;
 	}
 
 	.log-message {
-		color: #d7dfeb;
+		color: #dce0e5;
 	}
 
 	.empty-state {
@@ -1091,11 +1356,13 @@
 
 	@media (max-width: 640px) {
 		.sidebar-controls {
-			grid-template-columns: minmax(0, 1fr) auto;
+			grid-template-columns: minmax(0, 1fr) auto auto;
+			gap: 0.42rem;
 		}
 
-		.sort-menu {
-			justify-content: flex-end;
+		.sort-menu select {
+			min-width: 0;
+			width: 5.9rem;
 		}
 	}
 </style>

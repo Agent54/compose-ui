@@ -15,6 +15,8 @@
 	},
 	"dependencies": {
 		"@tanstack/db": "latest",
+		"@tanstack/query-core": "latest",
+		"@tanstack/query-db-collection": "latest",
 		"@tanstack/svelte-db": "latest"
 	},
 	"devDependencies": {
