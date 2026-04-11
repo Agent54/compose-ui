@@ -34,7 +34,7 @@ export type ComposeProject = {
 	state: 'running' | 'exited' | 'uncreated' | 'stopped' | 'paused';
 	statusLabel: string;
 	containerCount: number;
-	watch: boolean;
+	watching: boolean;
 	expanded: boolean;
 	updatedLabel: string;
 };

@@ -251,9 +251,9 @@ export function setProjectExpanded(projectId: string, expanded: boolean) {
 	}
 }
 
-export function setProjectWatch(projectId: string, watch: boolean) {
+export function setProjectWatching(projectId: string, watching: boolean) {
 	projectsCollection.update(projectId, (draft) => {
-		draft.watch = watch;
+		draft.watching = watching;
 		draft.updatedLabel = 'just now';
 	});
 }

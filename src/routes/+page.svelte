@@ -24,11 +24,12 @@
 		servicesCollection,
 		setConnectionState,
 		setProjectExpanded,
-		setProjectWatch,
+		setProjectWatching,
+		stopServices,
 		startProject,
 		startServices,
-		startWatch,
-		stopWatch,
+		startWatching,
+		stopWatching,
 		uiStateCollection,
 		unpauseServices,
 		updateUiState
@@ -227,6 +228,16 @@
 		return project.state !== 'running' && project.state !== 'paused';
 	}
 
+	function projectCanStop(project: ComposeProject) {
+		const services = projectServices(project.id);
+
+		if (services.length) {
+			return services.some((service) => service.state === 'running' || service.state === 'paused');
+		}
+
+		return project.state === 'running' || project.state === 'paused';
+	}
+
 	function projectIconTone(project: ComposeProject) {
 		const services = projectServices(project.id);
 
@@ -292,7 +303,7 @@
 			return 'play';
 		}
 
-		return 'container';
+		return 'stop';
 	}
 
 	async function refresh() {
@@ -340,21 +351,28 @@
 		appendLog(project.id, 'ok', logMessage);
 	}
 
-	async function handleStart(project = selectedProject, service?: ComposeService) {
+	async function handleStartStopToggle(project = selectedProject, service?: ComposeService) {
 		if (!project || !uiState || busyAction) {
 			return;
 		}
 
 		const serviceNames = service ? [service.serviceName] : undefined;
-		busyAction = `start:${project.id}:${service?.id ?? 'project'}`;
+		const shouldStop = service
+			? service.state === 'running' || service.state === 'paused'
+			: projectCanStop(project);
+		busyAction = `${shouldStop ? 'stop' : 'start'}:${project.id}:${service?.id ?? 'project'}`;
 
 		try {
-			if (service) {
+			if (shouldStop) {
+				await stopServices(uiState, project, serviceNames);
+				await syncAfterAction(project, `Stopped ${service?.serviceName ?? project.name}.`);
+				setConnectionState('connected', `Stopped ${service?.serviceName ?? project.name}.`);
+			} else if (service) {
 				await startServices(uiState, project, serviceNames);
 				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name}.`);
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (project.state === 'uncreated') {
-				await startProject(uiState, project.path, project.watch);
+				await startProject(uiState, project.path, project.watching);
 				await syncAfterAction(project, `Started ${project.name} via /up.`);
 				setConnectionState('connected', `Started ${project.name}.`);
 			} else {
@@ -363,8 +381,15 @@
 				setConnectionState('connected', `Started ${project.name}.`);
 			}
 		} catch {
-			setConnectionState('error', `Failed to start ${service?.serviceName ?? project.name}.`);
-			appendLog(project.id, 'warn', `Failed to start ${service?.serviceName ?? project.name}.`);
+			setConnectionState(
+				'error',
+				`Failed to ${shouldStop ? 'stop' : 'start'} ${service?.serviceName ?? project.name}.`
+			);
+			appendLog(
+				project.id,
+				'warn',
+				`Failed to ${shouldStop ? 'stop' : 'start'} ${service?.serviceName ?? project.name}.`
+			);
 		} finally {
 			busyAction = null;
 		}
@@ -410,37 +435,37 @@
 		}
 	}
 
-	async function handleWatchToggle(project = selectedProject) {
+	async function handleWatchingToggle(project = selectedProject) {
 		if (!project || !uiState || busyAction) {
 			return;
 		}
 
-		const nextWatch = !project.watch;
-		busyAction = `watch:${project.id}`;
+		const nextWatching = !project.watching;
+		busyAction = `watching:${project.id}`;
 
 		try {
-			if (nextWatch) {
-				await startWatch(uiState, project.id, project.path);
-				appendLog(project.id, 'ok', `Watch started for ${project.name}.`);
+			if (nextWatching) {
+				await startWatching(uiState, project.id, project.path);
+				appendLog(project.id, 'ok', `Started watching ${project.name}.`);
 			} else {
-				await stopWatch(uiState, project.id);
-				appendLog(project.id, 'info', `Watch stopped for ${project.name}.`);
+				await stopWatching(uiState, project.id);
+				appendLog(project.id, 'info', `Stopped watching ${project.name}.`);
 			}
 
-			setProjectWatch(project.id, nextWatch);
+			setProjectWatching(project.id, nextWatching);
 			setConnectionState(
 				'connected',
-				`${nextWatch ? 'Watch attached to' : 'Watch removed from'} ${project.name}.`
+				`${nextWatching ? 'Watching' : 'Stopped watching'} ${project.name}.`
 			);
 		} catch {
 			setConnectionState(
 				'error',
-				`${nextWatch ? 'Failed to attach watch to' : 'Failed to remove watch from'} ${project.name}.`
+				`${nextWatching ? 'Failed to start watching' : 'Failed to stop watching'} ${project.name}.`
 			);
 			appendLog(
 				project.id,
 				'warn',
-				`${nextWatch ? 'Failed to attach watch' : 'Failed to remove watch'} for ${project.name}.`
+				`${nextWatching ? 'Failed to start watching' : 'Failed to stop watching'} ${project.name}.`
 			);
 		} finally {
 			busyAction = null;
@@ -538,15 +563,15 @@
 							</button>
 
 							<div class="row-actions">
-								{#if projectCanStart(project)}
+								{#if projectCanStart(project) || projectCanStop(project)}
 									<button
 										class="overlay-button"
 										type="button"
-										aria-label={`Start ${project.name}`}
-										onmousedown={() => handleStart(project)}
+										aria-label={`${projectCanStop(project) ? 'Stop' : 'Start'} ${project.name}`}
+										onmousedown={() => handleStartStopToggle(project)}
 										disabled={busyAction !== null}
 									>
-										<Icon name="play" size={13} />
+										<Icon name={projectCanStop(project) ? 'stop' : 'play'} size={13} />
 									</button>
 								{/if}
 
@@ -565,11 +590,11 @@
 								<button
 									class="overlay-button"
 									type="button"
-									aria-label={`${project.watch ? 'Stop watch for' : 'Watch'} ${project.name}`}
-									onmousedown={() => handleWatchToggle(project)}
+									aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${project.name}`}
+									onmousedown={() => handleWatchingToggle(project)}
 									disabled={busyAction !== null}
 								>
-									<Icon name="watch" size={13} />
+									<Icon name="eye" size={13} />
 								</button>
 							</div>
 						</div>
@@ -596,15 +621,18 @@
 											</div>
 
 											<div class="row-actions">
-												{#if ['exited', 'created', 'unknown'].includes(service.state)}
+												{#if ['exited', 'created', 'unknown', 'running', 'paused'].includes(service.state)}
 													<button
 														class="overlay-button"
 														type="button"
-														aria-label={`Start ${service.serviceName}`}
-														onmousedown={() => handleStart(project, service)}
+														aria-label={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
+														onmousedown={() => handleStartStopToggle(project, service)}
 														disabled={busyAction !== null}
 													>
-														<Icon name="play" size={13} />
+														<Icon
+															name={service.state === 'running' || service.state === 'paused' ? 'stop' : 'play'}
+															size={13}
+														/>
 													</button>
 												{/if}
 
@@ -623,11 +651,11 @@
 												<button
 													class="overlay-button"
 													type="button"
-													aria-label={`${project.watch ? 'Stop watch for' : 'Watch'} ${service.serviceName}`}
-													onmousedown={() => handleWatchToggle(project)}
+													aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
+													onmousedown={() => handleWatchingToggle(project)}
 													disabled={busyAction !== null}
 												>
-													<Icon name="watch" size={13} />
+													<Icon name="eye" size={13} />
 												</button>
 											</div>
 										</div>
@@ -678,8 +706,8 @@
 						>
 							{selectedProject?.statusLabel ?? 'Unknown'}
 						</span>
-						<span class:active-pill={selectedProject?.watch} class="pill">
-							{selectedProject?.watch ? 'Watch Active' : 'No Watch'}
+						<span class:active-pill={selectedProject?.watching} class="pill">
+							{selectedProject?.watching ? 'Watching' : 'Not Watching'}
 						</span>
 					</div>
 				</div>
@@ -698,8 +726,8 @@
 						<strong>{exitedServices}</strong>
 					</div>
 					<div class="metric">
-						<span class="metric-label">Watch</span>
-						<strong>{selectedProject?.watch ? 'On' : 'Off'}</strong>
+						<span class="metric-label">Watching</span>
+						<strong>{selectedProject?.watching ? 'On' : 'Off'}</strong>
 					</div>
 				</div>
 
@@ -736,10 +764,10 @@
 			<section class="card log-card">
 				<div class="card-header">
 					<div>
-						<p class="eyebrow">Watch Output</p>
+						<p class="eyebrow">Watching</p>
 						<h3>{selectedProject?.name ?? 'No project selected'}</h3>
 					</div>
-					<div class="log-hint">Live watch stream</div>
+					<div class="log-hint">Live watching stream</div>
 				</div>
 
 				{#if selectedLogs.length}
@@ -753,7 +781,7 @@
 						{/each}
 					</div>
 				{:else}
-					<div class="empty-state">No watch output yet.</div>
+					<div class="empty-state">No watching output yet.</div>
 				{/if}
 			</section>
 		</div>
@@ -1339,7 +1367,7 @@
 		min-height: 9rem;
 	}
 
-	@media (max-width: 1100px) {
+	@media (max-width: 700px) {
 		.panel {
 			display: none;
 		}

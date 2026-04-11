@@ -26,7 +26,7 @@ type ListedContainer = {
 	id?: string;
 	Name?: string;
 	name?: string;
-	Names?: string;
+	Names?: string | string[];
 	Service?: string;
 	service?: string;
 	Project?: string;
@@ -77,7 +77,7 @@ function toProject(raw: ListedProject, index: number): ComposeProject {
 		state: isRunning ? 'running' : isExited ? 'exited' : isUncreated ? 'uncreated' : 'stopped',
 		statusLabel: rawStatus || 'unknown',
 		containerCount,
-		watch: raw.watch === true || raw.watchActive === true || raw.watch_active === true,
+		watching: raw.watch === true || raw.watchActive === true || raw.watch_active === true,
 		expanded: false,
 		updatedLabel: 'just now'
 	};
@@ -146,9 +146,26 @@ function parseHealth(raw: ListedContainer): ComposeService['health'] {
 	return undefined;
 }
 
+function parseContainerName(raw: ListedContainer, fallback: string) {
+	const names = raw.Names;
+
+	if (Array.isArray(names) && names.length) {
+		return names[0]?.replace(/^\//, '') || fallback;
+	}
+
+	if (typeof names === 'string' && names.trim()) {
+		return names.replace(/^\//, '');
+	}
+
+	return fallback;
+}
+
 function toService(raw: ListedContainer, project: ComposeProject, index: number): ComposeService {
 	const serviceName = String(raw.Service ?? raw.service ?? raw.Name ?? raw.name ?? `service-${index + 1}`);
-	const containerName = String(raw.Name ?? raw.name ?? raw.Names ?? serviceName);
+	const containerName = parseContainerName(
+		raw,
+		String(raw.Name ?? raw.name ?? serviceName)
+	);
 	const containerId = String(raw.ID ?? raw.Id ?? raw.id ?? `${project.id}-${serviceName}-${index + 1}`);
 	const rawState = String(raw.State ?? raw.state ?? '').trim();
 	const rawStatus = String(raw.Status ?? raw.status ?? rawState).trim();
@@ -229,13 +246,13 @@ export async function checkHealth(ui: UiState) {
 	}
 }
 
-export async function startProject(ui: UiState, path: string, watch: boolean) {
+export async function startProject(ui: UiState, path: string, watching: boolean) {
 	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/up'), {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json'
 		},
-		body: JSON.stringify({ path, build: false, watch })
+		body: JSON.stringify({ path, build: false, watch: watching })
 	});
 
 	if (!response.ok) {
@@ -274,6 +291,16 @@ export async function startServices(
 	});
 }
 
+export async function stopServices(
+	ui: UiState,
+	project: Pick<ComposeProject, 'id' | 'path'>,
+	services?: string[]
+) {
+	await postProjectAction(ui, project.path, 'stop', project.id, {
+		...(services?.length ? { services } : {})
+	});
+}
+
 export async function pauseServices(
 	ui: UiState,
 	project: Pick<ComposeProject, 'id' | 'path'>,
@@ -300,7 +327,6 @@ export async function loadProjectServices(
 ): Promise<ComposeService[]> {
 	const params = new URLSearchParams();
 	params.set('all', 'true');
-	params.set('path', project.path);
 
 	const response = await fetch(
 		`${joinUrl(ui.serverUrl, ui.apiVersion, `/ps/${project.id}`)}?${params.toString()}`,
@@ -319,7 +345,7 @@ export async function loadProjectServices(
 	return parseServices(payload).map((service, index) => toService(service, project as ComposeProject, index));
 }
 
-export async function startWatch(ui: UiState, project: string, path?: string) {
+export async function startWatching(ui: UiState, project: string, path?: string) {
 	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, `/watch/${project}`), {
 		method: 'POST',
 		headers: {
@@ -329,16 +355,16 @@ export async function startWatch(ui: UiState, project: string, path?: string) {
 	});
 
 	if (!response.ok) {
-		throw new Error(`watch start returned ${response.status}`);
+		throw new Error(`watch returned ${response.status}`);
 	}
 }
 
-export async function stopWatch(ui: UiState, project: string) {
+export async function stopWatching(ui: UiState, project: string) {
 	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, `/watch/${project}`), {
 		method: 'DELETE'
 	});
 
 	if (!response.ok) {
-		throw new Error(`watch stop returned ${response.status}`);
+		throw new Error(`stop watching returned ${response.status}`);
 	}
 }
