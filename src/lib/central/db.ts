@@ -1,7 +1,14 @@
-import { createCollection, localOnlyCollectionOptions } from '@tanstack/db';
+import { createCollection, localOnlyCollectionOptions, localStorageCollectionOptions } from '@tanstack/db';
 
 import { initialLogs, initialProjects, initialServices, initialUiState } from './sample-data';
-import type { ComposeProject, ComposeService, ConnectionStatus, LogEntry, UiState } from './types';
+import type {
+	ComposeProject,
+	ComposeService,
+	ConnectionStatus,
+	LocalSettings,
+	LogEntry,
+	UiState
+} from './types';
 
 type RecordWithId = { id: string };
 
@@ -59,6 +66,14 @@ export const logsCollection = createCollection(
 	})
 );
 
+export const settingsCollection = createCollection(
+	localStorageCollectionOptions({
+		id: 'compose-settings',
+		storageKey: 'compose-control-settings',
+		getKey: (item: LocalSettings) => item.id
+	})
+);
+
 export function updateUiState(patch: Partial<Omit<UiState, 'id'>>) {
 	uiStateCollection.update('app', (draft) => {
 		Object.assign(draft, patch);
@@ -70,9 +85,24 @@ export function selectProject(projectId: string) {
 }
 
 export function setProjectExpanded(projectId: string, expanded: boolean) {
-	projectsCollection.update(projectId, (draft) => {
-		draft.expanded = expanded;
-	});
+	try {
+		settingsCollection.update('localstorage', (draft: LocalSettings) => {
+			const expandedIds = new Set(draft.expandedProjectIds);
+
+			if (expanded) {
+				expandedIds.add(projectId);
+			} else {
+				expandedIds.delete(projectId);
+			}
+
+			draft.expandedProjectIds = [...expandedIds];
+		});
+	} catch {
+		settingsCollection.insert({
+			id: 'localstorage',
+			expandedProjectIds: expanded ? [projectId] : []
+		});
+	}
 }
 
 export function setProjectWatch(projectId: string, watch: boolean) {

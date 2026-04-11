@@ -2,11 +2,14 @@ import type { ComposeProject, ComposeService, UiState } from './types';
 
 type ListedProject = {
 	name?: string;
+	Name?: string;
 	project?: string;
 	id?: string;
+	ID?: string;
 	path?: string;
 	dir?: string;
 	directory?: string;
+	ConfigFiles?: string;
 	watch?: boolean;
 	watchActive?: boolean;
 	watch_active?: boolean;
@@ -14,6 +17,7 @@ type ListedProject = {
 	active?: boolean;
 	state?: string;
 	status?: string;
+	Status?: string;
 };
 
 type RefreshResult = {
@@ -39,22 +43,31 @@ function joinUrl(serverUrl: string, version: string, path: string) {
 }
 
 function toProject(raw: ListedProject, index: number): ComposeProject {
-	const name = raw.name ?? raw.project ?? raw.id ?? `project-${index + 1}`;
-	const id = slugify(name);
-	const stateValue = String(raw.state ?? raw.status ?? '').toLowerCase();
+	const name = raw.Name ?? raw.name ?? raw.project ?? raw.ID ?? raw.id ?? `project-${index + 1}`;
+	const sourceId = raw.ID ?? raw.id ?? name;
+	const id = slugify(sourceId);
+	const rawStatus = String(raw.Status ?? raw.status ?? raw.state ?? '').trim();
+	const stateValue = rawStatus.toLowerCase();
+	const statusMatch = /^([a-z-]+)(?:\((\d+)\))?$/i.exec(rawStatus);
+	const statusName = statusMatch?.[1]?.toLowerCase() ?? stateValue;
+	const containerCount = Number(statusMatch?.[2] ?? 0);
 	const isRunning =
 		raw.running === true ||
 		raw.active === true ||
-		stateValue === 'running' ||
+		statusName === 'running' ||
 		stateValue === 'up';
+	const isExited = statusName === 'exited';
+	const isUncreated = statusName === 'uncreated';
 
 	return {
 		id,
 		name,
-		path: raw.path ?? raw.dir ?? raw.directory ?? `./${name}`,
-		state: isRunning ? 'running' : 'stopped',
+		path: raw.ConfigFiles ?? raw.path ?? raw.dir ?? raw.directory ?? `./${name}`,
+		state: isRunning ? 'running' : isExited ? 'exited' : isUncreated ? 'uncreated' : 'stopped',
+		statusLabel: rawStatus || 'unknown',
+		containerCount,
 		watch: raw.watch === true || raw.watchActive === true || raw.watch_active === true,
-		expanded: true,
+		expanded: false,
 		updatedLabel: 'just now'
 	};
 }

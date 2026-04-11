@@ -31,7 +31,9 @@ export type ComposeProject = {
 	id: string;
 	name: string;
 	path: string;
-	state: 'running' | 'stopped';
+	state: 'running' | 'exited' | 'uncreated' | 'stopped';
+	statusLabel: string;
+	containerCount: number;
 	watch: boolean;
 	expanded: boolean;
 	updatedLabel: string;
@@ -55,11 +57,17 @@ export type LogEntry = {
 	message: string;
 };
 
+export type LocalSettings = {
+	id: 'localstorage';
+	expandedProjectIds: string[];
+};
+
 export type UiState = {
 	id: 'app';
 	serverUrl: string;
 	apiVersion: string;
 	filter: string;
+	sortBy: 'path' | 'name' | 'status';
 	selectedProjectId: string;
 	status: ConnectionStatus;
 	statusDetail: string;

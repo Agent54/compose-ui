@@ -5,6 +5,7 @@
 		| 'play'
 		| 'refresh'
 		| 'search'
+		| 'sort'
 		| 'sliders'
 		| 'gear'
 		| 'pulse'
@@ -58,6 +59,10 @@
 	{:else if name === 'search'}
 		<circle cx="11" cy="11" r="6" />
 		<path d="m20 20-3.5-3.5" />
+	{:else if name === 'sort'}
+		<path d="M7 6h10" />
+		<path d="M10 12h7" />
+		<path d="M13 18h4" />
 	{:else if name === 'sliders'}
 		<path d="M4 21v-7" />
 		<path d="M4 10V3" />

@@ -15,6 +15,7 @@
 		projectsCollection,
 		refreshProjectsFromServer,
 		selectProject,
+		settingsCollection,
 		servicesCollection,
 		setConnectionState,
 		setProjectExpanded,
@@ -29,17 +30,53 @@
 
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
+	const settingsQuery = useLiveQuery((q) => q.from({ settings: settingsCollection }));
 	const allServicesQuery = useLiveQuery((q) => q.from({ services: servicesCollection }));
 	const allLogsQuery = useLiveQuery((q) => q.from({ logs: logsCollection }));
 
 	const selectedProjectId = $derived(uiQuery.data?.[0]?.selectedProjectId ?? '');
 	const uiState = $derived((uiQuery.data?.[0] as UiState | undefined) ?? undefined);
-	const projects = $derived.by((): ComposeProject[] => {
-		const entries = [...((projectsQuery.data ?? []) as ComposeProject[])];
-		return entries.sort((left, right) => left.name.localeCompare(right.name));
-	});
+	const settings = $derived(
+		(settingsQuery.data?.[0] as unknown as { id: 'localstorage'; expandedProjectIds: string[] } | undefined) ??
+			undefined
+	);
+	const expandedProjectIds = $derived(new Set(settings?.expandedProjectIds ?? []));
 	const allServices = $derived((allServicesQuery.data ?? []) as ComposeService[]);
 	const allLogs = $derived((allLogsQuery.data ?? []) as LogEntry[]);
+
+	function stateRank(state: ComposeProject['state']) {
+		if (state === 'running') return 0;
+		if (state === 'exited') return 1;
+		if (state === 'stopped') return 2;
+		if (state === 'uncreated') return 3;
+		return 4;
+	}
+
+	function compareProjects(
+		left: ComposeProject,
+		right: ComposeProject,
+		sortBy: UiState['sortBy']
+	) {
+		if (sortBy === 'path') {
+			return left.path.localeCompare(right.path) || left.name.localeCompare(right.name);
+		}
+
+		if (sortBy === 'name') {
+			return left.name.localeCompare(right.name) || left.path.localeCompare(right.path);
+		}
+
+		return (
+			stateRank(left.state) - stateRank(right.state) ||
+			right.containerCount - left.containerCount ||
+			left.name.localeCompare(right.name)
+		);
+	}
+
+	const projects = $derived.by((): ComposeProject[] => {
+		const entries = [...((projectsQuery.data ?? []) as ComposeProject[])];
+		return entries.sort((left, right) => compareProjects(left, right, uiState?.sortBy ?? 'status'));
+	});
+
 	const servicesByProject = $derived.by(() => {
 		const grouped = new Map<string, ComposeService[]>();
 
@@ -78,9 +115,19 @@
 		selectedProject ? allLogs.filter((entry) => entry.projectId === selectedProject.id).slice().reverse() : []
 	);
 	const runningServices = $derived(
-		selectedServices.filter((service) => service.state === 'running').length
+		selectedServices.length
+			? selectedServices.filter((service) => service.state === 'running').length
+			: selectedProject?.state === 'running'
+				? selectedProject.containerCount
+				: 0
 	);
-	const exitedServices = $derived(selectedServices.filter((service) => service.state === 'exited').length);
+	const exitedServices = $derived(
+		selectedServices.length
+			? selectedServices.filter((service) => service.state === 'exited').length
+			: selectedProject?.state === 'exited'
+				? selectedProject.containerCount
+				: 0
+	);
 
 	let refreshing = $state(false);
 	let busyAction = $state<'up' | 'watch' | null>(null);
@@ -134,62 +181,83 @@
 		}
 	}
 
-	async function handleUp() {
-		if (!selectedProject || !uiState || busyAction) {
+	async function handleUp(project = selectedProject) {
+		if (!project || !uiState || busyAction) {
 			return;
 		}
 
 		busyAction = 'up';
 
 		try {
-			await startProject(uiState, selectedProject.path, selectedProject.watch);
-			setProjectState(selectedProject.id, 'running');
-			setConnectionState('connected', `Started ${selectedProject.name}.`);
-			appendLog(selectedProject.id, 'ok', `Started ${selectedProject.name} via /up.`);
+			await startProject(uiState, project.path, project.watch);
+			setProjectState(project.id, 'running');
+			setConnectionState('connected', `Started ${project.name}.`);
+			appendLog(project.id, 'ok', `Started ${project.name} via /up.`);
 		} catch {
-			setConnectionState('error', `Failed to start ${selectedProject.name} from http://127.0.0.1:8094.`);
-			appendLog(selectedProject.id, 'warn', `Failed to start ${selectedProject.name}.`);
+			setConnectionState('error', `Failed to start ${project.name} from http://127.0.0.1:8094.`);
+			appendLog(project.id, 'warn', `Failed to start ${project.name}.`);
 		} finally {
 			busyAction = null;
 		}
 	}
 
-	async function handleWatchToggle() {
-		if (!selectedProject || !uiState || busyAction) {
+	async function handleWatchToggle(project = selectedProject) {
+		if (!project || !uiState || busyAction) {
 			return;
 		}
 
-		const nextWatch = !selectedProject.watch;
+		const nextWatch = !project.watch;
 		busyAction = 'watch';
 
 		try {
 			if (nextWatch) {
-				await startWatch(uiState, selectedProject.id, selectedProject.path);
-				appendLog(selectedProject.id, 'ok', `Watch started for ${selectedProject.name}.`);
+				await startWatch(uiState, project.id, project.path);
+				appendLog(project.id, 'ok', `Watch started for ${project.name}.`);
 			} else {
-				await stopWatch(uiState, selectedProject.id);
-				appendLog(selectedProject.id, 'info', `Watch stopped for ${selectedProject.name}.`);
+				await stopWatch(uiState, project.id);
+				appendLog(project.id, 'info', `Watch stopped for ${project.name}.`);
 			}
 
-			setProjectWatch(selectedProject.id, nextWatch);
+			setProjectWatch(project.id, nextWatch);
 			setConnectionState(
 				'connected',
-				`${nextWatch ? 'Watch attached to' : 'Watch removed from'} ${selectedProject.name}.`
+				`${nextWatch ? 'Watch attached to' : 'Watch removed from'} ${project.name}.`
 			);
 		} catch {
 			setConnectionState(
 				'error',
-				`${nextWatch ? 'Failed to attach watch to' : 'Failed to remove watch from'} ${selectedProject.name}.`
+				`${nextWatch ? 'Failed to attach watch to' : 'Failed to remove watch from'} ${project.name}.`
 			);
 			appendLog(
-				selectedProject.id,
+				project.id,
 				'warn',
-				`${nextWatch ? 'Failed to attach watch' : 'Failed to remove watch'} for ${selectedProject.name}.`
+				`${nextWatch ? 'Failed to attach watch' : 'Failed to remove watch'} for ${project.name}.`
 			);
 		} finally {
 			busyAction = null;
 		}
 	}
+
+	function handleProjectSelect(projectId: string) {
+		selectProject(projectId);
+	}
+
+	function projectIconTone(project: ComposeProject) {
+		if (project.state === 'running') {
+			return 'project-icon-running';
+		}
+
+		if (project.state === 'uncreated') {
+			return 'project-icon-uncreated';
+		}
+
+		if (project.statusLabel.includes('running(') && project.statusLabel.includes('exited(')) {
+			return 'project-icon-warning';
+		}
+
+		return 'project-icon-exited';
+	}
+
 </script>
 
 <svelte:head>
@@ -202,57 +270,45 @@
 
 <div class="workspace">
 	<aside class="sidebar">
-		<header class="sidebar-header">
-			<div>
-				<p class="eyebrow">Docker Compose</p>
-				<h1>Containers</h1>
-			</div>
-		</header>
+		<div class="sidebar-controls">
+			<label class="search">
+				<Icon name="search" size={13} />
+				<input
+					type="text"
+					value={uiState?.filter ?? ''}
+					oninput={(event) =>
+						updateUiState({ filter: (event.currentTarget as HTMLInputElement).value })}
+					placeholder="Filter projects"
+					aria-label="Filter projects"
+				/>
+			</label>
 
-		<div class="sidebar-actions">
+			<label class="sort-menu">
+				<Icon name="sort" size={12} />
+				<select
+					value={uiState?.sortBy ?? 'status'}
+					onchange={(event) =>
+						updateUiState({
+							sortBy: (event.currentTarget as HTMLSelectElement).value as UiState['sortBy']
+						})}
+					aria-label="Sort projects"
+				>
+					<option value="status">Status</option>
+					<option value="name">Project Name</option>
+					<option value="path">Compose Path</option>
+				</select>
+			</label>
+
 			<button
-				class="sidebar-action"
+				class="refresh-button"
 				type="button"
-				aria-label="Refresh"
+				aria-label="Refresh projects"
 				onmousedown={refresh}
-				disabled={refreshing}
+				disabled={refreshing || busyAction !== null}
 			>
-				<Icon name="refresh" size={13} spinning={refreshing} />
-				<span>{refreshing ? 'Syncing…' : 'Refresh'}</span>
-			</button>
-			<button
-				class="sidebar-action"
-				type="button"
-				aria-label="Up selected project"
-				onmousedown={handleUp}
-				disabled={!selectedProject || busyAction !== null}
-			>
-				<Icon name="play" size={13} />
-				<span>{busyAction === 'up' ? 'Starting…' : 'Up'}</span>
-			</button>
-			<button
-				class="sidebar-action"
-				type="button"
-				aria-label="Toggle watch for selected project"
-				onmousedown={handleWatchToggle}
-				disabled={!selectedProject || busyAction !== null}
-			>
-				<Icon name="watch" size={13} />
-				<span>{busyAction === 'watch' ? 'Working…' : selectedProject?.watch ? 'Stop Watch' : 'Watch'}</span>
+				<Icon name="refresh" size={12} spinning={refreshing} />
 			</button>
 		</div>
-
-		<label class="search">
-			<Icon name="search" size={13} />
-			<input
-				type="text"
-				value={uiState?.filter ?? ''}
-				oninput={(event) =>
-					updateUiState({ filter: (event.currentTarget as HTMLInputElement).value })}
-				placeholder="Filter projects"
-				aria-label="Filter projects"
-			/>
-		</label>
 
 		<div class="tree" role="tree" aria-label="Compose projects">
 			{#if visibleProjects.length}
@@ -267,23 +323,47 @@
 							<button
 								class="toggle"
 								type="button"
-								aria-label={project.expanded ? `Collapse ${project.name}` : `Expand ${project.name}`}
-								aria-pressed={project.expanded}
-								onmousedown={() => setProjectExpanded(project.id, !project.expanded)}
+								aria-label={expandedProjectIds.has(project.id) ? `Collapse ${project.name}` : `Expand ${project.name}`}
+								aria-pressed={expandedProjectIds.has(project.id)}
+								onmousedown={() => setProjectExpanded(project.id, !expandedProjectIds.has(project.id))}
 							>
-								<Icon name="chevron" rotated={project.expanded} />
+								<Icon name="chevron" rotated={expandedProjectIds.has(project.id)} />
 							</button>
 
-							<button class="project-button" type="button" onmousedown={() => selectProject(project.id)}>
-								<span class="project-name">
-									<Icon name="container" size={13} />
-									{project.name}
+							<button class="project-button" type="button" onmousedown={() => handleProjectSelect(project.id)}>
+								<span class="project-copy">
+									<span class="project-name">
+										<Icon name="container" size={13} class={projectIconTone(project)} />
+										{project.name}
+									</span>
+									<span class="project-status">{project.statusLabel}</span>
 								</span>
-								<span class="project-meta">{project.updatedLabel}</span>
+								<span class="project-meta">{project.containerCount > 0 ? project.containerCount : ''}</span>
 							</button>
+
+							<div class="row-actions">
+								<button
+									class="overlay-button"
+									type="button"
+									aria-label={`Up ${project.name}`}
+									onmousedown={() => handleUp(project)}
+									disabled={busyAction !== null}
+								>
+									<Icon name="play" size={11} />
+								</button>
+								<button
+									class="overlay-button"
+									type="button"
+									aria-label={`${project.watch ? 'Stop watch for' : 'Watch'} ${project.name}`}
+									onmousedown={() => handleWatchToggle(project)}
+									disabled={busyAction !== null}
+								>
+									<Icon name="watch" size={11} />
+								</button>
+							</div>
 						</div>
 
-						{#if project.expanded && (servicesByProject.get(project.id)?.length ?? 0) > 0}
+						{#if expandedProjectIds.has(project.id) && (servicesByProject.get(project.id)?.length ?? 0) > 0}
 							<div class="service-list">
 								{#each servicesByProject.get(project.id) ?? [] as service (service.id)}
 									<div class="service-row">
@@ -301,6 +381,27 @@
 													<span class="health-tag">({service.health})</span>
 												{/if}
 											</div>
+										</div>
+
+										<div class="row-actions">
+											<button
+												class="overlay-button"
+												type="button"
+												aria-label={`Up ${project.name}`}
+												onmousedown={() => handleUp(project)}
+												disabled={busyAction !== null}
+											>
+												<Icon name="play" size={11} />
+											</button>
+											<button
+												class="overlay-button"
+												type="button"
+												aria-label={`${project.watch ? 'Stop watch for' : 'Watch'} ${project.name}`}
+												onmousedown={() => handleWatchToggle(project)}
+												disabled={busyAction !== null}
+											>
+												<Icon name="watch" size={11} />
+											</button>
 										</div>
 									</div>
 								{/each}
@@ -338,7 +439,7 @@
 					</div>
 					<div class="pill-row">
 						<span class:active-pill={selectedProject?.state === 'running'} class="pill">
-							{selectedProject?.state === 'running' ? 'Running' : 'Stopped'}
+							{selectedProject?.statusLabel ?? 'Unknown'}
 						</span>
 						<span class:active-pill={selectedProject?.watch} class="pill">
 							{selectedProject?.watch ? 'Watch Active' : 'No Watch'}
@@ -421,21 +522,24 @@
 
 	.workspace {
 		display: grid;
-		min-height: 100vh;
+		height: 100vh;
+		min-height: 0;
 		grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
-		background: #090c11;
+		background: #090a0b;
+		overflow: hidden;
 	}
 
 	.sidebar {
 		display: flex;
+		min-height: 0;
 		flex-direction: column;
 		border-right: 1px solid rgba(129, 146, 170, 0.16);
 		background:
-			linear-gradient(180deg, rgba(18, 24, 34, 0.98), rgba(13, 17, 24, 0.96)),
-			#0a0d12;
+			linear-gradient(180deg, rgba(17, 17, 18, 0.98), rgba(11, 11, 12, 0.98)),
+			#0a0a0b;
+		overflow: hidden;
 	}
 
-	.sidebar-header,
 	.panel-header,
 	.card-header {
 		display: flex;
@@ -444,22 +548,10 @@
 		gap: 1rem;
 	}
 
-	.sidebar-header {
-		padding: 0.95rem 1rem 0.5rem;
-	}
-
-	h1,
 	h2,
 	h3,
 	p {
 		margin: 0;
-	}
-
-	h1 {
-		font-size: 0.78rem;
-		font-weight: 700;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
 	}
 
 	h2 {
@@ -481,51 +573,48 @@
 		color: #8a97a8;
 	}
 
-	.sidebar-actions,
 	.pill-row {
 		display: flex;
 		align-items: center;
 		gap: 0.45rem;
 	}
 
-	.sidebar-actions {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		padding: 0 0.75rem 0.6rem;
-	}
-
-	.sidebar-action,
+	.refresh-button,
+	.sort-menu select,
 	.toggle,
-	.project-button {
+	.project-button,
+	.overlay-button {
 		border: 0;
 		background: transparent;
 		color: inherit;
 		cursor: pointer;
 	}
 
-	.sidebar-action {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.35rem;
-		border-radius: 0.6rem;
-		border: 1px solid rgba(126, 143, 166, 0.18);
-		background: rgba(18, 24, 33, 0.72);
-		padding: 0.42rem 0.48rem;
-		font-size: 0.72rem;
-		font-weight: 600;
-		color: #d9e3ef;
-		white-space: nowrap;
+	.refresh-button {
+		display: grid;
+		height: 1.55rem;
+		width: 1.55rem;
+		place-items: center;
+		border-radius: 0.45rem;
+		color: #979b9f;
 	}
 
-	.sidebar-action:hover:enabled {
-		border-color: rgba(154, 173, 198, 0.26);
-		background: rgba(25, 34, 46, 0.9);
+	.refresh-button:hover:enabled {
+		background: rgba(255, 255, 255, 0.06);
+		color: #e5e7ea;
 	}
 
-	.sidebar-action:disabled {
+	.refresh-button:disabled {
 		cursor: default;
 		opacity: 0.55;
+	}
+
+	.sidebar-controls {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto auto;
+		gap: 0.5rem;
+		padding: 0.8rem 0.75rem 0.6rem;
+		align-items: center;
 	}
 
 	.toggle {
@@ -534,38 +623,63 @@
 		width: 1.7rem;
 		place-items: center;
 		border-radius: 0.45rem;
-		color: #95a3b6;
+		color: #90959b;
 	}
 
 	.toggle:hover {
-		background: rgba(106, 124, 151, 0.12);
-		color: #dbe3ee;
+		background: rgba(255, 255, 255, 0.06);
+		color: #e2e5e9;
 	}
 
 	.search {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		margin: 0 0.75rem 0.55rem;
-		border: 1px solid rgba(120, 138, 162, 0.18);
+		height: 1.95rem;
+		border: 1px solid rgba(255, 255, 255, 0.08);
 		border-radius: 0.6rem;
-		background: rgba(10, 14, 19, 0.82);
-		padding: 0 0.7rem;
-		color: #8091a6;
+		background: rgba(255, 255, 255, 0.03);
+		padding: 0 0.58rem;
+		color: #8f949b;
 	}
 
 	.search input {
 		width: 100%;
+		height: 100%;
+		min-height: 0;
 		border: 0;
 		background: transparent;
 		color: #dfe7f2;
-		padding: 0.58rem 0;
+		padding: 0;
+		line-height: 1;
 		outline: none;
 		font-size: 0.82rem;
 	}
 
+	.sort-menu {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.42rem;
+		color: #8f949b;
+	}
+
+	.sort-menu select {
+		min-width: 7.2rem;
+		height: 1.95rem;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 0.6rem;
+		background: rgba(255, 255, 255, 0.03);
+		padding: 0 1.85rem 0 0.72rem;
+		font-size: 0.77rem;
+		font-weight: 600;
+		line-height: 1;
+		color: #dfe7f2;
+		outline: none;
+	}
+
 	.tree {
 		flex: 1;
+		min-height: 0;
 		overflow: auto;
 		padding: 0 0.2rem 0.85rem;
 	}
@@ -575,25 +689,35 @@
 	}
 
 	.project-row {
+		position: relative;
 		display: grid;
 		grid-template-columns: 1.8rem minmax(0, 1fr);
 		align-items: center;
-		padding-right: 0.4rem;
 		border-radius: 0.5rem;
+		overflow: visible;
 	}
 
 	.project-row.selected {
-		background: rgba(18, 59, 111, 0.55);
+		background: rgba(255, 255, 255, 0.05);
 	}
 
 	.project-button {
 		display: flex;
 		min-width: 0;
+		width: 100%;
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.75rem;
-		padding: 0.34rem 0.35rem 0.34rem 0;
+		padding: 0.34rem 0.55rem 0.34rem 0;
 		text-align: left;
+	}
+
+	.project-copy {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.06rem;
 	}
 
 	.project-name {
@@ -605,22 +729,51 @@
 		font-weight: 600;
 	}
 
+	.project-status {
+		font-size: 0.72rem;
+		color: #8fa0b5;
+	}
+
+	:global(.project-icon-uncreated) {
+		color: #6d7278;
+	}
+
+	:global(.project-icon-running) {
+		color: #6fb67b;
+	}
+
+	:global(.project-icon-warning) {
+		color: #bda36a;
+	}
+
+	:global(.project-icon-exited) {
+		color: #b76f6f;
+	}
+
 	.project-meta {
 		flex: none;
+		margin-left: auto;
+		min-width: 1.25rem;
+		text-align: right;
 		font-size: 0.72rem;
+		font-weight: 700;
 		color: #7f8da0;
+		transform: translateX(-6px);
 	}
 
 	.service-list {
 		margin-left: 1.9rem;
 		border-left: 1px solid rgba(107, 121, 141, 0.16);
+		border-left-color: rgba(255, 255, 255, 0.08);
 		padding: 0.08rem 0 0.28rem 0.65rem;
 	}
 
 	.service-row {
+		position: relative;
 		display: flex;
 		gap: 0.55rem;
 		padding: 0.19rem 0;
+		overflow: visible;
 	}
 
 	.service-state {
@@ -630,7 +783,7 @@
 	}
 
 	.service-state-running {
-		color: #5ccc75;
+		color: #78c788;
 	}
 
 	.service-copy {
@@ -660,6 +813,49 @@
 		color: #7fe39a;
 	}
 
+	.row-actions {
+		position: absolute;
+		top: 50%;
+		right: 0.3rem;
+		display: inline-flex;
+		gap: 0.22rem;
+		transform: translateY(-50%);
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 120ms ease;
+		z-index: 3;
+	}
+
+	.project-row:hover .row-actions,
+	.project-row:focus-within .row-actions,
+	.service-row:hover .row-actions,
+	.service-row:focus-within .row-actions {
+		opacity: 1;
+		pointer-events: auto;
+	}
+
+	.overlay-button {
+		display: grid;
+		height: 1.45rem;
+		width: 1.45rem;
+		place-items: center;
+		border-radius: 0.45rem;
+		border: 1px solid rgba(126, 143, 166, 0.16);
+		background: rgba(9, 9, 10, 0.96);
+		color: #c8d3e1;
+		box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+	}
+
+	.overlay-button:hover:enabled {
+		border-color: rgba(255, 255, 255, 0.12);
+		background: rgba(24, 24, 26, 0.98);
+	}
+
+	.overlay-button:disabled {
+		cursor: default;
+		opacity: 0.55;
+	}
+
 	.sidebar-empty,
 	.empty-state {
 		display: grid;
@@ -677,8 +873,10 @@
 
 	.panel {
 		display: flex;
+		min-height: 0;
 		flex-direction: column;
 		padding: 1rem 1rem 1.15rem;
+		overflow: hidden;
 	}
 
 	.panel-header {
@@ -721,12 +919,12 @@
 	.content-grid {
 		display: grid;
 		flex: 1;
+		min-height: 0;
 		grid-template-columns: 1fr;
 		grid-template-areas:
 			'summary'
 			'logs';
 		gap: 0.9rem;
-		min-height: 0;
 		padding-top: 0.95rem;
 	}
 
@@ -737,8 +935,8 @@
 		border: 1px solid rgba(120, 138, 162, 0.16);
 		border-radius: 0.95rem;
 		background:
-			linear-gradient(180deg, rgba(17, 22, 31, 0.96), rgba(12, 16, 22, 0.98)),
-			#0d1218;
+			linear-gradient(180deg, rgba(18, 18, 19, 0.96), rgba(12, 12, 13, 0.98)),
+			#0d0d0e;
 		padding: 0.95rem 1rem;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 	}
@@ -886,24 +1084,18 @@
 		}
 
 		.sidebar {
-			min-height: 100vh;
+			min-height: 0;
 			border-right: 0;
 		}
 	}
 
-	@media (max-width: 520px) {
-		.sidebar-action {
-			padding-inline: 0.42rem;
+	@media (max-width: 640px) {
+		.sidebar-controls {
+			grid-template-columns: minmax(0, 1fr) auto;
 		}
 
-		.sidebar-action span {
-			display: none;
-		}
-	}
-
-	@media (max-width: 260px) {
-		.sidebar-actions {
-			grid-template-columns: 1fr;
+		.sort-menu {
+			justify-content: flex-end;
 		}
 	}
 </style>
