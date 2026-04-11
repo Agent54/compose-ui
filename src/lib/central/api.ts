@@ -59,17 +59,6 @@ function toProject(raw: ListedProject, index: number): ComposeProject {
 	};
 }
 
-function toSyntheticService(project: ComposeProject): ComposeService {
-	return {
-		id: `${project.id}-compose`,
-		projectId: project.id,
-		name: `${project.name}-compose`,
-		containerName: `${project.name}-compose-1`,
-		state: project.state === 'running' ? 'running' : 'exited',
-		stateText: project.state === 'running' ? 'Running now' : 'Stopped'
-	};
-}
-
 function parseProjects(payload: unknown) {
 	if (Array.isArray(payload)) {
 		return payload as ListedProject[];
@@ -113,11 +102,11 @@ export async function refreshProjectsFromServer(ui: UiState): Promise<RefreshRes
 
 	return {
 		projects,
-		services: projects.map(toSyntheticService)
+		services: []
 	};
 }
 
-export async function pingServer(ui: UiState) {
+export async function checkHealth(ui: UiState) {
 	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/_ping'), {
 		method: 'GET',
 		headers: {
@@ -126,7 +115,7 @@ export async function pingServer(ui: UiState) {
 	});
 
 	if (!response.ok) {
-		throw new Error(`ping returned ${response.status}`);
+		throw new Error(`/_ping returned ${response.status}`);
 	}
 }
 

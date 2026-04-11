@@ -25,7 +25,7 @@ export type ApiSchema = {
 	routes: ApiRoute[];
 };
 
-export type ConnectionStatus = 'demo' | 'connected' | 'error';
+export type ConnectionStatus = 'connecting' | 'connected' | 'error';
 
 export type ComposeProject = {
 	id: string;

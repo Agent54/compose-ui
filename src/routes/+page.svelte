@@ -4,19 +4,16 @@
 
 	import Icon from '$lib/components/Icon.svelte';
 	import {
-		apiRoutes,
-		apiSchema,
 		appendLog,
+		checkHealth,
 		type ComposeProject,
 		type ComposeService,
 		type LogEntry,
 		type UiState,
 		hydrateProjects,
 		logsCollection,
-		pingServer,
 		projectsCollection,
 		refreshProjectsFromServer,
-		routeGroups,
 		selectProject,
 		servicesCollection,
 		setConnectionState,
@@ -51,10 +48,9 @@
 
 			if (current) {
 				current.push(service);
-				continue;
+			} else {
+				grouped.set(service.projectId, [service]);
 			}
-
-			grouped.set(service.projectId, [service]);
 		}
 
 		return grouped;
@@ -77,9 +73,9 @@
 		() => projects.find((project) => project.id === selectedProjectId) ?? visibleProjects[0]
 	);
 
-	const selectedServices = $derived(servicesByProject.get(selectedProjectId) ?? []);
+	const selectedServices = $derived(selectedProject ? servicesByProject.get(selectedProject.id) ?? [] : []);
 	const selectedLogs = $derived(
-		allLogs.filter((entry) => entry.projectId === selectedProjectId).slice().reverse()
+		selectedProject ? allLogs.filter((entry) => entry.projectId === selectedProject.id).slice().reverse() : []
 	);
 	const runningServices = $derived(
 		selectedServices.filter((service) => service.state === 'running').length
@@ -91,6 +87,10 @@
 
 	$effect(() => {
 		if (!visibleProjects.length) {
+			if (selectedProjectId) {
+				selectProject('');
+			}
+
 			return;
 		}
 
@@ -111,9 +111,10 @@
 		}
 
 		refreshing = true;
+		setConnectionState('connecting', 'Connecting to Compose API at http://127.0.0.1:8094.');
 
 		try {
-			await pingServer(uiState);
+			await checkHealth(uiState);
 			const result = await refreshProjectsFromServer(uiState);
 			hydrateProjects(result.projects, result.services);
 			setConnectionState('connected', 'Compose API reachable and synchronized.');
@@ -123,10 +124,10 @@
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Server unavailable';
-			setConnectionState('demo', `Compose API offline; seeded state retained (${message}).`);
+			setConnectionState('error', `Compose API unavailable at http://127.0.0.1:8094 (${message}).`);
 
 			if (selectedProjectId) {
-				appendLog(selectedProjectId, 'warn', 'Compose API unavailable; showing the seeded preview.');
+				appendLog(selectedProjectId, 'warn', 'Compose API unavailable.');
 			}
 		} finally {
 			refreshing = false;
@@ -134,33 +135,32 @@
 	}
 
 	async function handleUp() {
-		if (!selectedProject || !uiState) {
+		if (!selectedProject || !uiState || busyAction) {
 			return;
 		}
 
 		busyAction = 'up';
-		setProjectState(selectedProject.id, 'running');
 
 		try {
 			await startProject(uiState, selectedProject.path, selectedProject.watch);
+			setProjectState(selectedProject.id, 'running');
 			setConnectionState('connected', `Started ${selectedProject.name}.`);
 			appendLog(selectedProject.id, 'ok', `Started ${selectedProject.name} via /up.`);
 		} catch {
-			setConnectionState('demo', `Simulated start for ${selectedProject.name}; server not reachable.`);
-			appendLog(selectedProject.id, 'info', `Simulated start for ${selectedProject.name}.`);
+			setConnectionState('error', `Failed to start ${selectedProject.name} from http://127.0.0.1:8094.`);
+			appendLog(selectedProject.id, 'warn', `Failed to start ${selectedProject.name}.`);
 		} finally {
 			busyAction = null;
 		}
 	}
 
 	async function handleWatchToggle() {
-		if (!selectedProject || !uiState) {
+		if (!selectedProject || !uiState || busyAction) {
 			return;
 		}
 
 		const nextWatch = !selectedProject.watch;
 		busyAction = 'watch';
-		setProjectWatch(selectedProject.id, nextWatch);
 
 		try {
 			if (nextWatch) {
@@ -171,36 +171,24 @@
 				appendLog(selectedProject.id, 'info', `Watch stopped for ${selectedProject.name}.`);
 			}
 
-			setConnectionState('connected', `${nextWatch ? 'Watch attached to' : 'Watch removed from'} ${selectedProject.name}.`);
+			setProjectWatch(selectedProject.id, nextWatch);
+			setConnectionState(
+				'connected',
+				`${nextWatch ? 'Watch attached to' : 'Watch removed from'} ${selectedProject.name}.`
+			);
 		} catch {
 			setConnectionState(
-				'demo',
-				`${nextWatch ? 'Watch enabled' : 'Watch disabled'} locally for ${selectedProject.name}.`
+				'error',
+				`${nextWatch ? 'Failed to attach watch to' : 'Failed to remove watch from'} ${selectedProject.name}.`
 			);
 			appendLog(
 				selectedProject.id,
-				nextWatch ? 'ok' : 'info',
-				`${nextWatch ? 'Local watch attached' : 'Local watch removed'} for ${selectedProject.name}.`
+				'warn',
+				`${nextWatch ? 'Failed to attach watch' : 'Failed to remove watch'} for ${selectedProject.name}.`
 			);
 		} finally {
 			busyAction = null;
 		}
-	}
-
-	function methodTone(method: string) {
-		if (method === 'POST') {
-			return 'method-post';
-		}
-
-		if (method === 'DELETE') {
-			return 'method-delete';
-		}
-
-		if (method === 'HEAD') {
-			return 'method-head';
-		}
-
-		return 'method-get';
 	}
 </script>
 
@@ -219,22 +207,40 @@
 				<p class="eyebrow">Docker Compose</p>
 				<h1>Containers</h1>
 			</div>
-
-			<div class="toolbar">
-				<button class="icon-button" type="button" aria-label="Refresh" onclick={refresh}>
-					<Icon name="refresh" class={refreshing ? 'spinning' : ''} />
-				</button>
-				<button class="icon-button" type="button" aria-label="Search">
-					<Icon name="search" />
-				</button>
-				<button class="icon-button" type="button" aria-label="Filter">
-					<Icon name="sliders" />
-				</button>
-				<button class="icon-button" type="button" aria-label="Settings">
-					<Icon name="gear" />
-				</button>
-			</div>
 		</header>
+
+		<div class="sidebar-actions">
+			<button
+				class="sidebar-action"
+				type="button"
+				aria-label="Refresh"
+				onmousedown={refresh}
+				disabled={refreshing}
+			>
+				<Icon name="refresh" size={13} spinning={refreshing} />
+				<span>{refreshing ? 'Syncing…' : 'Refresh'}</span>
+			</button>
+			<button
+				class="sidebar-action"
+				type="button"
+				aria-label="Up selected project"
+				onmousedown={handleUp}
+				disabled={!selectedProject || busyAction !== null}
+			>
+				<Icon name="play" size={13} />
+				<span>{busyAction === 'up' ? 'Starting…' : 'Up'}</span>
+			</button>
+			<button
+				class="sidebar-action"
+				type="button"
+				aria-label="Toggle watch for selected project"
+				onmousedown={handleWatchToggle}
+				disabled={!selectedProject || busyAction !== null}
+			>
+				<Icon name="watch" size={13} />
+				<span>{busyAction === 'watch' ? 'Working…' : selectedProject?.watch ? 'Stop Watch' : 'Watch'}</span>
+			</button>
+		</div>
 
 		<label class="search">
 			<Icon name="search" size={13} />
@@ -249,58 +255,62 @@
 		</label>
 
 		<div class="tree" role="tree" aria-label="Compose projects">
-			{#each visibleProjects as project (project.id)}
-				<div class="project-group">
-					<div
-						class:selected={selectedProject?.id === project.id}
-						class="project-row"
-						role="treeitem"
-						aria-selected={selectedProject?.id === project.id}
-					>
-						<button
-							class="toggle"
-							type="button"
-							aria-label={project.expanded ? `Collapse ${project.name}` : `Expand ${project.name}`}
-							aria-pressed={project.expanded}
-							onclick={() => setProjectExpanded(project.id, !project.expanded)}
+			{#if visibleProjects.length}
+				{#each visibleProjects as project (project.id)}
+					<div class="project-group">
+						<div
+							class:selected={selectedProject?.id === project.id}
+							class="project-row"
+							role="treeitem"
+							aria-selected={selectedProject?.id === project.id}
 						>
-							<Icon name="chevron" class={project.expanded ? 'rotated' : ''} />
-						</button>
+							<button
+								class="toggle"
+								type="button"
+								aria-label={project.expanded ? `Collapse ${project.name}` : `Expand ${project.name}`}
+								aria-pressed={project.expanded}
+								onmousedown={() => setProjectExpanded(project.id, !project.expanded)}
+							>
+								<Icon name="chevron" rotated={project.expanded} />
+							</button>
 
-						<button class="project-button" type="button" onclick={() => selectProject(project.id)}>
-							<span class="project-name">
-								<Icon name="container" size={13} />
-								{project.name}
-							</span>
-							<span class="project-meta">{project.updatedLabel}</span>
-						</button>
-					</div>
+							<button class="project-button" type="button" onmousedown={() => selectProject(project.id)}>
+								<span class="project-name">
+									<Icon name="container" size={13} />
+									{project.name}
+								</span>
+								<span class="project-meta">{project.updatedLabel}</span>
+							</button>
+						</div>
 
-					{#if project.expanded}
-						<div class="service-list">
-							{#each servicesByProject.get(project.id) ?? [] as service (service.id)}
-								<div class="service-row">
-									<span class:service-state-running={service.state === 'running'} class="service-state">
-										<Icon name="play" size={11} />
-									</span>
-									<div class="service-copy">
-										<div class="service-title">
-											<span>{service.name}</span>
-											<span class="service-container">{service.containerName}</span>
-										</div>
-										<div class="service-subtitle">
-											{service.stateText}
-											{#if service.health}
-												<span class="health-tag">({service.health})</span>
-											{/if}
+						{#if project.expanded && (servicesByProject.get(project.id)?.length ?? 0) > 0}
+							<div class="service-list">
+								{#each servicesByProject.get(project.id) ?? [] as service (service.id)}
+									<div class="service-row">
+										<span class:service-state-running={service.state === 'running'} class="service-state">
+											<Icon name="play" size={11} />
+										</span>
+										<div class="service-copy">
+											<div class="service-title">
+												<span>{service.name}</span>
+												<span class="service-container">{service.containerName}</span>
+											</div>
+											<div class="service-subtitle">
+												{service.stateText}
+												{#if service.health}
+													<span class="health-tag">({service.health})</span>
+												{/if}
+											</div>
 										</div>
 									</div>
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</div>
-			{/each}
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/each}
+			{:else}
+				<div class="sidebar-empty">No Compose projects available.</div>
+			{/if}
 		</div>
 	</aside>
 
@@ -308,70 +318,23 @@
 		<header class="panel-header">
 			<div class="panel-heading">
 				<div class="status-line">
-					<span class:connected={uiState?.status === 'connected'} class="status-dot"></span>
+					<span
+						class:connected={uiState?.status === 'connected'}
+						class:error-state={uiState?.status === 'error'}
+						class="status-dot"
+					></span>
 					<span class="status-copy">{uiState?.statusDetail}</span>
 				</div>
 				<h2>{selectedProject?.name ?? 'Compose Projects'}</h2>
 			</div>
-
-			<div class="action-row">
-				<button
-					class="ghost-button"
-					type="button"
-					onclick={handleUp}
-					disabled={!selectedProject || busyAction !== null}
-				>
-					{busyAction === 'up' ? 'Starting…' : 'Up'}
-				</button>
-				<button
-					class="ghost-button"
-					type="button"
-					onclick={handleWatchToggle}
-					disabled={!selectedProject || busyAction !== null}
-				>
-					{busyAction === 'watch' ? 'Working…' : selectedProject?.watch ? 'Stop Watch' : 'Watch'}
-				</button>
-				<button class="ghost-button" type="button" onclick={refresh} disabled={refreshing}>
-					{refreshing ? 'Syncing…' : 'Refresh'}
-				</button>
-			</div>
 		</header>
-
-		<section class="control-bar">
-			<label>
-				<span>Server</span>
-				<div class="field">
-					<Icon name="link" size={13} />
-					<input
-						type="text"
-						value={uiState?.serverUrl ?? ''}
-						onchange={(event) =>
-							updateUiState({ serverUrl: (event.currentTarget as HTMLInputElement).value })}
-						placeholder="http://127.0.0.1:8080"
-					/>
-				</div>
-			</label>
-
-			<label>
-				<span>API</span>
-				<div class="field small">
-					<input
-						type="text"
-						value={uiState?.apiVersion ?? '1'}
-						onchange={(event) =>
-							updateUiState({ apiVersion: (event.currentTarget as HTMLInputElement).value })}
-						placeholder="1"
-					/>
-				</div>
-			</label>
-		</section>
 
 		<div class="content-grid">
 			<section class="card summary-card">
 				<div class="card-header">
 					<div>
 						<p class="eyebrow">Project</p>
-						<h3>{selectedProject?.path ?? apiSchema.config.rootDir}</h3>
+						<h3>{selectedProject?.path ?? 'http://127.0.0.1:8094'}</h3>
 					</div>
 					<div class="pill-row">
 						<span class:active-pill={selectedProject?.state === 'running'} class="pill">
@@ -393,60 +356,35 @@
 						<strong>{exitedServices}</strong>
 					</div>
 					<div class="metric">
-						<span class="metric-label">Routes</span>
-						<strong>{apiRoutes.length}</strong>
+						<span class="metric-label">Watch</span>
+						<strong>{selectedProject?.watch ? 'On' : 'Off'}</strong>
 					</div>
 					<div class="metric">
-						<span class="metric-label">Max Depth</span>
-						<strong>{apiSchema.config.maxDepth}</strong>
+						<span class="metric-label">Source</span>
+						<strong>8094</strong>
 					</div>
 				</div>
 
-				<div class="compact-list">
-					{#each selectedServices as service (service.id)}
-						<div class="compact-row">
-							<div>
-								<div class="row-title">{service.name}</div>
-								<div class="row-subtitle">{service.containerName}</div>
-							</div>
-							<div class="row-tail">
-								<span class:ok-state={service.state === 'running'} class="state-chip">
-									{service.state === 'running' ? 'Up' : 'Exited'}
-								</span>
-								<span>{service.stateText}</span>
-							</div>
-						</div>
-					{/each}
-				</div>
-			</section>
-
-			<section class="card routes-card">
-				<div class="card-header">
-					<div>
-						<p class="eyebrow">API Surface</p>
-						<h3>{apiSchema.versionMatcher}</h3>
-					</div>
-					<div class="excluded">
-						Excluded: {apiSchema.config.excludedDirs.join(', ')}
-					</div>
-				</div>
-
-				<div class="route-groups">
-					{#each routeGroups as group (group.title)}
-						<div class="route-group">
-							<div class="route-group-title">{group.title}</div>
-							{#each group.routes as route (`${route.method}-${route.path}`)}
-								<div class="route-row">
-									<div class="route-main">
-										<span class={`method-chip ${methodTone(route.method)}`}>{route.method}</span>
-										<code>{route.path}</code>
-									</div>
-									<div class="route-summary">{route.summary}</div>
+				{#if selectedServices.length}
+					<div class="compact-list">
+						{#each selectedServices as service (service.id)}
+							<div class="compact-row">
+								<div>
+									<div class="row-title">{service.name}</div>
+									<div class="row-subtitle">{service.containerName}</div>
 								</div>
-							{/each}
-						</div>
-					{/each}
-				</div>
+								<div class="row-tail">
+									<span class:ok-state={service.state === 'running'} class="state-chip">
+										{service.state === 'running' ? 'Up' : 'Exited'}
+									</span>
+									<span>{service.stateText}</span>
+								</div>
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<div class="empty-state">No service detail exposed by the API.</div>
+				{/if}
 			</section>
 
 			<section class="card log-card">
@@ -455,18 +393,22 @@
 						<p class="eyebrow">Watch Output</p>
 						<h3>{selectedProject?.name ?? 'No project selected'}</h3>
 					</div>
-					<div class="log-hint">SSE ready through <code>/watch/{'{project}'}</code></div>
+					<div class="log-hint">Live watch stream</div>
 				</div>
 
-				<div class="log-list">
-					{#each selectedLogs as entry (entry.id)}
-						<div class="log-row">
-							<span class={`log-level log-${entry.level}`}>{entry.level}</span>
-							<span class="log-time">{entry.time}</span>
-							<span class="log-message">{entry.message}</span>
-						</div>
-					{/each}
-				</div>
+				{#if selectedLogs.length}
+					<div class="log-list">
+						{#each selectedLogs as entry (entry.id)}
+							<div class="log-row">
+								<span class={`log-level log-${entry.level}`}>{entry.level}</span>
+								<span class="log-time">{entry.time}</span>
+								<span class="log-message">{entry.message}</span>
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<div class="empty-state">No watch output yet.</div>
+				{/if}
 			</section>
 		</div>
 	</main>
@@ -503,7 +445,7 @@
 	}
 
 	.sidebar-header {
-		padding: 0.95rem 1rem 0.65rem;
+		padding: 0.95rem 1rem 0.5rem;
 	}
 
 	h1,
@@ -539,24 +481,53 @@
 		color: #8a97a8;
 	}
 
-	.toolbar,
-	.action-row,
+	.sidebar-actions,
 	.pill-row {
 		display: flex;
 		align-items: center;
 		gap: 0.45rem;
 	}
 
-	.icon-button,
-	.ghost-button,
+	.sidebar-actions {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		padding: 0 0.75rem 0.6rem;
+	}
+
+	.sidebar-action,
 	.toggle,
 	.project-button {
 		border: 0;
 		background: transparent;
 		color: inherit;
+		cursor: pointer;
 	}
 
-	.icon-button,
+	.sidebar-action {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.35rem;
+		border-radius: 0.6rem;
+		border: 1px solid rgba(126, 143, 166, 0.18);
+		background: rgba(18, 24, 33, 0.72);
+		padding: 0.42rem 0.48rem;
+		font-size: 0.72rem;
+		font-weight: 600;
+		color: #d9e3ef;
+		white-space: nowrap;
+	}
+
+	.sidebar-action:hover:enabled {
+		border-color: rgba(154, 173, 198, 0.26);
+		background: rgba(25, 34, 46, 0.9);
+	}
+
+	.sidebar-action:disabled {
+		cursor: default;
+		opacity: 0.55;
+	}
+
 	.toggle {
 		display: grid;
 		height: 1.7rem;
@@ -566,7 +537,6 @@
 		color: #95a3b6;
 	}
 
-	.icon-button:hover,
 	.toggle:hover {
 		background: rgba(106, 124, 151, 0.12);
 		color: #dbe3ee;
@@ -584,8 +554,7 @@
 		color: #8091a6;
 	}
 
-	.search input,
-	.field input {
+	.search input {
 		width: 100%;
 		border: 0;
 		background: transparent;
@@ -691,6 +660,21 @@
 		color: #7fe39a;
 	}
 
+	.sidebar-empty,
+	.empty-state {
+		display: grid;
+		place-items: center;
+		border-radius: 0.8rem;
+		background: rgba(255, 255, 255, 0.015);
+		font-size: 0.8rem;
+		color: #98a7bb;
+	}
+
+	.sidebar-empty {
+		margin: 0 0.55rem;
+		min-height: 8rem;
+	}
+
 	.panel {
 		display: flex;
 		flex-direction: column;
@@ -729,66 +713,21 @@
 		box-shadow: 0 0 0 0.16rem rgba(105, 208, 139, 0.15);
 	}
 
-	.ghost-button {
-		border-radius: 0.55rem;
-		border: 1px solid rgba(126, 143, 166, 0.18);
-		background: rgba(18, 24, 33, 0.72);
-		padding: 0.48rem 0.72rem;
-		font-size: 0.8rem;
-		font-weight: 600;
-		color: #d9e3ef;
-	}
-
-	.ghost-button:hover:enabled {
-		border-color: rgba(154, 173, 198, 0.26);
-		background: rgba(25, 34, 46, 0.9);
-	}
-
-	.ghost-button:disabled {
-		opacity: 0.55;
-		cursor: default;
-	}
-
-	.control-bar {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) 7rem;
-		gap: 0.85rem;
-		padding: 0.95rem 0 1rem;
-	}
-
-	.control-bar label {
-		display: grid;
-		gap: 0.4rem;
-		font-size: 0.74rem;
-		font-weight: 600;
-		color: #94a3b8;
-		text-transform: uppercase;
-		letter-spacing: 0.07em;
-	}
-
-	.field {
-		display: flex;
-		align-items: center;
-		gap: 0.55rem;
-		border: 1px solid rgba(120, 138, 162, 0.18);
-		border-radius: 0.6rem;
-		background: rgba(10, 14, 19, 0.78);
-		padding: 0 0.7rem;
-	}
-
-	.field.small {
-		padding-inline: 0.8rem;
+	.status-dot.error-state {
+		background: #d08266;
+		box-shadow: 0 0 0 0.16rem rgba(208, 130, 102, 0.15);
 	}
 
 	.content-grid {
 		display: grid;
 		flex: 1;
-		grid-template-columns: minmax(0, 1.1fr) minmax(18rem, 0.9fr);
+		grid-template-columns: 1fr;
 		grid-template-areas:
-			'summary routes'
-			'logs routes';
+			'summary'
+			'logs';
 		gap: 0.9rem;
 		min-height: 0;
+		padding-top: 0.95rem;
 	}
 
 	.card {
@@ -806,10 +745,6 @@
 
 	.summary-card {
 		grid-area: summary;
-	}
-
-	.routes-card {
-		grid-area: routes;
 	}
 
 	.log-card {
@@ -845,7 +780,6 @@
 	}
 
 	.metric-label,
-	.excluded,
 	.log-hint {
 		font-size: 0.75rem;
 		color: #94a3b8;
@@ -859,7 +793,6 @@
 	}
 
 	.compact-list,
-	.route-groups,
 	.log-list {
 		display: flex;
 		min-height: 0;
@@ -869,7 +802,6 @@
 	}
 
 	.compact-row,
-	.route-row,
 	.log-row {
 		display: flex;
 		align-items: center;
@@ -880,8 +812,7 @@
 		background: rgba(255, 255, 255, 0.015);
 	}
 
-	.row-tail,
-	.route-main {
+	.row-tail {
 		display: flex;
 		align-items: center;
 		gap: 0.55rem;
@@ -889,67 +820,15 @@
 		color: #9aacbf;
 	}
 
-	.state-chip,
-	.method-chip {
+	.state-chip {
 		border-radius: 999px;
 		padding: 0.18rem 0.48rem;
 		font-size: 0.68rem;
 		font-weight: 700;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
-	}
-
-	.state-chip {
 		background: rgba(123, 84, 84, 0.2);
 		color: #ffb6b6;
-	}
-
-	.method-chip {
-		min-width: 3.2rem;
-		text-align: center;
-	}
-
-	.method-get {
-		background: rgba(65, 111, 182, 0.2);
-		color: #a8c9ff;
-	}
-
-	.method-post {
-		background: rgba(68, 132, 88, 0.2);
-		color: #b9efc9;
-	}
-
-	.method-delete {
-		background: rgba(148, 79, 79, 0.22);
-		color: #ffc0c0;
-	}
-
-	.method-head {
-		background: rgba(126, 105, 62, 0.22);
-		color: #f1d298;
-	}
-
-	.route-group + .route-group {
-		margin-top: 0.55rem;
-	}
-
-	.route-group-title {
-		margin: 0 0 0.35rem 0.15rem;
-		font-size: 0.72rem;
-		font-weight: 700;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: #8393a8;
-	}
-
-	.route-row {
-		flex-direction: column;
-		align-items: stretch;
-	}
-
-	.route-summary {
-		font-size: 0.78rem;
-		color: #b0bccd;
 	}
 
 	.log-row {
@@ -993,57 +872,38 @@
 		color: #d7dfeb;
 	}
 
-	code {
-		font-family:
-			'JetBrains Mono', 'SFMono-Regular', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-			monospace;
-		font-size: 0.76rem;
-		color: #dce6f4;
-	}
-
-	.rotated {
-		transform: rotate(90deg);
-	}
-
-	.spinning {
-		animation: spin 0.9s linear infinite;
-	}
-
-	@keyframes spin {
-		to {
-			transform: rotate(360deg);
-		}
+	.empty-state {
+		min-height: 9rem;
 	}
 
 	@media (max-width: 1100px) {
-		.content-grid {
-			grid-template-columns: 1fr;
-			grid-template-areas:
-				'summary'
-				'routes'
-				'logs';
+		.panel {
+			display: none;
 		}
-	}
 
-	@media (max-width: 820px) {
 		.workspace {
 			grid-template-columns: 1fr;
 		}
 
 		.sidebar {
-			max-height: 24rem;
+			min-height: 100vh;
 			border-right: 0;
-			border-bottom: 1px solid rgba(129, 146, 170, 0.16);
+		}
+	}
+
+	@media (max-width: 520px) {
+		.sidebar-action {
+			padding-inline: 0.42rem;
 		}
 
-		.control-bar,
-		.metrics {
+		.sidebar-action span {
+			display: none;
+		}
+	}
+
+	@media (max-width: 260px) {
+		.sidebar-actions {
 			grid-template-columns: 1fr;
-		}
-
-		.panel-header {
-			flex-direction: column;
-			align-items: flex-start;
 		}
 	}
 </style>

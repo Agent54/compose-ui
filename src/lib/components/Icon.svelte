@@ -16,11 +16,15 @@
 		name,
 		size = 14,
 		stroke = 1.85,
+		rotated = false,
+		spinning = false,
 		class: className = ''
 	}: {
 		name: IconName;
 		size?: number;
 		stroke?: number;
+		rotated?: boolean;
+		spinning?: boolean;
 		class?: string;
 	} = $props();
 </script>
@@ -35,7 +39,7 @@
 	stroke-width={stroke}
 	stroke-linecap="round"
 	stroke-linejoin="round"
-	class={className}
+	class={`${className} ${rotated ? 'rotated' : ''} ${spinning ? 'spinning' : ''}`.trim()}
 	aria-hidden="true"
 >
 	{#if name === 'chevron'}
@@ -84,3 +88,23 @@
 		<path d="M14 11a5 5 0 0 0-7.54-.54l-2.02 2.02a5 5 0 0 0 7.07 7.07l1.3-1.3" />
 	{/if}
 </svg>
+
+<style>
+	svg {
+		flex: none;
+	}
+
+	.rotated {
+		transform: rotate(90deg);
+	}
+
+	.spinning {
+		animation: spin 0.9s linear infinite;
+	}
+
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+</style>

@@ -1,4 +1,4 @@
-import type { ApiRoute, ApiSchema } from './types';
+import type { ApiSchema } from './types';
 
 export const apiSchema: ApiSchema = {
 	versionMatcher: '/v{version:[0-9.]+}',
@@ -96,17 +96,3 @@ export const apiSchema: ApiSchema = {
 		}
 	]
 };
-
-export const apiRoutes = apiSchema.routes;
-
-export const routeGroups = apiRoutes.reduce<Array<{ title: string; routes: ApiRoute[] }>>((groups, route) => {
-	const title = route.path.startsWith('/watch') ? 'Watch' : route.path === '/up' ? 'Lifecycle' : 'Core';
-	const group = groups.find((entry) => entry.title === title);
-
-	if (group) {
-		group.routes.push(route);
-		return groups;
-	}
-
-	return [...groups, { title, routes: [route] }];
-}, []);
