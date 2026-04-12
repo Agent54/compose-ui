@@ -223,7 +223,11 @@ export function updateUiState(patch: Partial<Omit<UiState, 'id'>>) {
 }
 
 export function selectProject(projectId: string) {
-	updateUiState({ selectedProjectId: projectId });
+	updateUiState({ selectedProjectId: projectId, selectedContainerId: '' });
+}
+
+export function selectContainer(projectId: string, containerId: string) {
+	updateUiState({ selectedProjectId: projectId, selectedContainerId: containerId });
 }
 
 export function setProjectExpanded(projectId: string, expanded: boolean) {

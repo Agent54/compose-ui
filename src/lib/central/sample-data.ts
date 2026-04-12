@@ -8,6 +8,7 @@ export const initialUiState: UiState[] = [
 		filter: '',
 		sortBy: 'status',
 		selectedProjectId: '',
+		selectedContainerId: '',
 		status: 'connecting',
 		statusDetail: 'Connecting to Compose API at http://127.0.0.1:8094.'
 	}

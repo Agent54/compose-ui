@@ -1,4 +1,4 @@
-import type { ComposeProject, ComposeService, UiState } from './types';
+import type { ComposeProcessSnapshot, ComposeProject, ComposeService, UiState } from './types';
 
 type ListedProject = {
 	name?: string;
@@ -42,6 +42,22 @@ type ListedContainer = {
 type RefreshResult = {
 	projects: ComposeProject[];
 	services: ComposeService[];
+};
+
+type ListedProcessSnapshot = {
+	ID?: string;
+	Id?: string;
+	id?: string;
+	Name?: string;
+	name?: string;
+	Service?: string;
+	service?: string;
+	Replica?: string;
+	replica?: string;
+	Titles?: string[];
+	titles?: string[];
+	Processes?: string[][];
+	processes?: string[][];
 };
 
 function normalizeVersion(version: string) {
@@ -206,6 +222,49 @@ function parseServices(payload: unknown) {
 	return [];
 }
 
+function parseProcessSnapshots(payload: unknown) {
+	if (Array.isArray(payload)) {
+		return payload as ListedProcessSnapshot[];
+	}
+
+	if (payload && typeof payload === 'object') {
+		const objectPayload = payload as { containers?: unknown; items?: unknown; processes?: unknown };
+
+		if (Array.isArray(objectPayload.containers)) {
+			return objectPayload.containers as ListedProcessSnapshot[];
+		}
+
+		if (Array.isArray(objectPayload.items)) {
+			return objectPayload.items as ListedProcessSnapshot[];
+		}
+
+		if (Array.isArray(objectPayload.processes)) {
+			return objectPayload.processes as ListedProcessSnapshot[];
+		}
+	}
+
+	return [];
+}
+
+function toProcessSnapshot(
+	raw: ListedProcessSnapshot,
+	project: Pick<ComposeProject, 'id'>
+): ComposeProcessSnapshot {
+	const containerId = String(raw.ID ?? raw.Id ?? raw.id ?? crypto.randomUUID());
+	const containerName = String(raw.Name ?? raw.name ?? '');
+
+	return {
+		id: `${project.id}:${containerId}`,
+		projectId: project.id,
+		containerId,
+		containerName,
+		serviceName: String(raw.Service ?? raw.service ?? containerName),
+		replica: raw.Replica ?? raw.replica,
+		titles: Array.isArray(raw.Titles ?? raw.titles) ? [...(raw.Titles ?? raw.titles ?? [])] : [],
+		processes: Array.isArray(raw.Processes ?? raw.processes) ? [...(raw.Processes ?? raw.processes ?? [])] : []
+	};
+}
+
 export async function refreshProjectsFromServer(ui: UiState): Promise<RefreshResult> {
 	const params = new URLSearchParams();
 	params.set('all', 'true');
@@ -343,6 +402,30 @@ export async function loadProjectServices(
 
 	const payload = (await response.json()) as unknown;
 	return parseServices(payload).map((service, index) => toService(service, project as ComposeProject, index));
+}
+
+export async function loadProjectProcesses(
+	ui: UiState,
+	project: Pick<ComposeProject, 'id'>
+): Promise<ComposeProcessSnapshot[]> {
+	const params = new URLSearchParams();
+	params.set('all', 'true');
+
+	const response = await fetch(
+		`${joinUrl(ui.serverUrl, ui.apiVersion, `/top/${project.id}`)}?${params.toString()}`,
+		{
+			headers: {
+				accept: 'application/json'
+			}
+		}
+	);
+
+	if (!response.ok) {
+		throw new Error(`top returned ${response.status}`);
+	}
+
+	const payload = (await response.json()) as unknown;
+	return parseProcessSnapshots(payload).map((entry) => toProcessSnapshot(entry, project));
 }
 
 export async function startWatching(ui: UiState, project: string, path?: string) {

@@ -7,6 +7,8 @@
 	import {
 		appendLog,
 		checkHealth,
+		loadProjectProcesses,
+		type ComposeProcessSnapshot,
 		type ComposeProject,
 		type ComposeService,
 		type LocalSettings,
@@ -19,6 +21,7 @@
 		projectsCollection,
 		refreshProjectsFromServer,
 		reloadProjectServices,
+		selectContainer,
 		selectProject,
 		settingsCollection,
 		servicesCollection,
@@ -42,6 +45,18 @@
 		};
 	};
 
+	type ProcessField = {
+		label: string;
+		value: string;
+	};
+
+	type ParsedCommand = {
+		raw: string;
+		commandName: string;
+		commandPath: string;
+		argString: string;
+	};
+
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
 	const settingsQuery = useLiveQuery((q) => q.from({ settings: settingsCollection }));
@@ -49,6 +64,7 @@
 
 	const uiState = $derived((uiQuery.data?.[0] as UiState | undefined) ?? undefined);
 	const selectedProjectId = $derived(uiState?.selectedProjectId ?? '');
+	const selectedContainerId = $derived(uiState?.selectedContainerId ?? '');
 	const settings = $derived((settingsQuery.data?.[0] as LocalSettings | undefined) ?? undefined);
 	const expandedProjectIdList = $derived((settings?.expandedProjectIds ?? []).slice().sort());
 	const expandedProjectIds = $derived(new Set(expandedProjectIdList));
@@ -144,6 +160,11 @@
 	const selectedServices = $derived(
 		selectedProject ? servicesByProject.get(selectedProject.id) ?? [] : []
 	);
+	const selectedContainer = $derived(
+		selectedContainerId
+			? selectedServices.find((service) => service.id === selectedContainerId)
+			: undefined
+	);
 	const selectedLogs = $derived(
 		selectedProject ? allLogs.filter((entry) => entry.projectId === selectedProject.id).slice().reverse() : []
 	);
@@ -167,6 +188,9 @@
 
 	let refreshing = $state(false);
 	let busyAction = $state<string | null>(null);
+	let topLoading = $state(false);
+	let topError = $state('');
+	let processSnapshots = $state<ComposeProcessSnapshot[]>([]);
 
 	$effect(() => {
 		if (!visibleProjects.length) {
@@ -184,8 +208,55 @@
 		}
 	});
 
+	$effect(() => {
+		if (!selectedContainerId) {
+			return;
+		}
+
+		if (!selectedContainer || selectedContainer.projectId !== selectedProjectId) {
+			updateUiState({ selectedContainerId: '' });
+		}
+	});
+
 	onMount(() => {
 		void refresh();
+	});
+
+	$effect(() => {
+		const project = selectedProject;
+
+		if (!project || !uiState) {
+			processSnapshots = [];
+			topError = '';
+			topLoading = false;
+			return;
+		}
+
+		let cancelled = false;
+		topLoading = true;
+		topError = '';
+
+		void loadProjectProcesses(uiState, project)
+			.then((entries) => {
+				if (!cancelled) {
+					processSnapshots = entries;
+				}
+			})
+			.catch((error) => {
+				if (!cancelled) {
+					processSnapshots = [];
+					topError = error instanceof Error ? error.message : 'Unable to load processes.';
+				}
+			})
+			.finally(() => {
+				if (!cancelled) {
+					topLoading = false;
+				}
+			});
+
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	function projectServices(projectId: string) {
@@ -194,6 +265,67 @@
 
 	function hasLoadedProjectServices(projectId: string) {
 		return openProjectRows.some((row) => row.project.id === projectId);
+	}
+
+	const visibleProcessSnapshots = $derived(
+		selectedContainerId
+			? processSnapshots.filter((entry) => entry.id === selectedContainerId)
+			: processSnapshots
+	);
+
+	function splitShellWords(value: string) {
+		const tokens = value.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+		return tokens.map((token) => token.replace(/^['"]|['"]$/g, ''));
+	}
+
+	function parseCommand(raw: string): ParsedCommand | null {
+		const normalized = raw.trim();
+
+		if (!normalized) {
+			return null;
+		}
+
+		const tokens = splitShellWords(normalized);
+		const executable = tokens[0] ?? '';
+
+		if (!executable) {
+			return null;
+		}
+
+		const lastSlash = executable.lastIndexOf('/');
+		const commandPath = lastSlash > 0 ? executable.slice(0, lastSlash) : '';
+		const commandName = lastSlash >= 0 ? executable.slice(lastSlash + 1) : executable;
+		const argString = tokens.slice(1).join(' ');
+
+		return {
+			raw: normalized,
+			commandName,
+			commandPath,
+			argString
+		};
+	}
+
+	function processFields(entry: ComposeProcessSnapshot, process: string[]) {
+		return entry.titles.reduce<ProcessField[]>((fields, title, index) => {
+			const value = process[index];
+
+			if (!value || title === 'CMD') {
+				return fields;
+			}
+
+			fields.push({ label: title, value });
+			return fields;
+		}, []);
+	}
+
+	function processCommand(entry: ComposeProcessSnapshot, process: string[]) {
+		const commandIndex = entry.titles.indexOf('CMD');
+
+		if (commandIndex < 0) {
+			return null;
+		}
+
+		return parseCommand(process[commandIndex] ?? '');
 	}
 
 	function isProjectFullyPaused(project: ComposeProject) {
@@ -476,6 +608,10 @@
 		selectProject(projectId);
 	}
 
+	function handleContainerSelect(projectId: string, serviceId: string) {
+		selectContainer(projectId, serviceId);
+	}
+
 	function toggleProject(projectId: string) {
 		setProjectExpanded(projectId, !expandedProjectIds.has(projectId));
 	}
@@ -603,22 +739,29 @@
 							<div class="service-list">
 								{#if projectServices(project.id).length}
 									{#each projectServices(project.id) as service (service.id)}
-										<div class="service-row">
-											<span class={`service-state ${serviceStateTone(service)}`}>
-												<Icon name={serviceStateIcon(service)} size={13} />
-											</span>
-											<div class="service-copy">
-												<div class="service-title">
-													<span>{service.serviceName}</span>
-													<span class="service-container">{service.containerName}</span>
+										<div class:selected={selectedContainerId === service.id} class="service-row">
+											<button
+												class="service-button"
+												type="button"
+												aria-label={`Select ${service.serviceName}`}
+												onmousedown={() => handleContainerSelect(project.id, service.id)}
+											>
+												<span class={`service-state ${serviceStateTone(service)}`}>
+													<Icon name={serviceStateIcon(service)} size={13} />
+												</span>
+												<div class="service-copy">
+													<div class="service-title">
+														<span>{service.serviceName}</span>
+														<span class="service-container">{service.containerName}</span>
+													</div>
+													<div class="service-subtitle">
+														{service.stateText}
+														{#if service.health}
+															<span class="health-tag">({service.health})</span>
+														{/if}
+													</div>
 												</div>
-												<div class="service-subtitle">
-													{service.stateText}
-													{#if service.health}
-														<span class="health-tag">({service.health})</span>
-													{/if}
-												</div>
-											</div>
+											</button>
 
 											<div class="row-actions">
 												{#if ['exited', 'created', 'unknown', 'running', 'paused'].includes(service.state)}
@@ -757,6 +900,79 @@
 						{selectedProject && expandedProjectIds.has(selectedProject.id)
 							? 'No containers returned by /ps for this project.'
 							: 'Open a project to load its containers.'}
+					</div>
+				{/if}
+			</section>
+
+			<section class="card process-card">
+				<div class="card-header">
+					<div>
+						<p class="eyebrow">Processes</p>
+						<h3>
+							{selectedContainer
+								? selectedContainer.containerName
+								: selectedProject?.name ?? 'No project selected'}
+						</h3>
+					</div>
+					<div class="log-hint">`/top` output</div>
+				</div>
+
+				{#if topLoading}
+					<div class="empty-state">Loading processes…</div>
+				{:else if topError}
+					<div class="empty-state">Failed to load processes: {topError}</div>
+				{:else if visibleProcessSnapshots.length}
+					<div class="process-list">
+						{#each visibleProcessSnapshots as entry (entry.id)}
+							<div class="process-group">
+								<div class="process-heading">
+									<div>
+										<div class="row-title">{entry.serviceName}</div>
+										<div class="row-subtitle">{entry.containerName}</div>
+									</div>
+									{#if entry.replica}
+										<span class="process-replica">#{entry.replica}</span>
+									{/if}
+								</div>
+
+								<div class="process-cards">
+									{#each entry.processes as process, index (`${entry.id}-${index}`)}
+										{@const command = processCommand(entry, process)}
+										<div class="process-item">
+											<div class="process-meta">
+												{#each processFields(entry, process) as field}
+													<div class="process-meta-item">
+														<span class="process-meta-label">{field.label}</span>
+														<strong>{field.value}</strong>
+													</div>
+												{/each}
+											</div>
+
+											{#if command}
+												<div class="command-card">
+													{#if command.commandPath}
+														<div class="command-path">{command.commandPath}</div>
+													{/if}
+
+													<div class="command-line">
+														<span class="command-name">{command.commandName}</span>
+														{#if command.argString}
+															<span class="command-inline-args">{command.argString}</span>
+														{/if}
+													</div>
+												</div>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<div class="empty-state">
+						{selectedContainer
+							? 'No processes returned for the selected container.'
+							: 'No processes returned for this project.'}
 					</div>
 				{/if}
 			</section>
@@ -1047,6 +1263,25 @@
 		gap: 0.58rem;
 		padding: 0.24rem 0;
 		overflow: visible;
+		border-radius: 0.55rem;
+	}
+
+	.service-row.selected {
+		background: rgba(255, 255, 255, 0.05);
+	}
+
+	.service-button {
+		display: flex;
+		width: 100%;
+		min-width: 0;
+		align-items: flex-start;
+		gap: 0.58rem;
+		padding: 0.02rem 3.9rem 0.02rem 0;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+		text-align: left;
 	}
 
 	.service-state {
@@ -1210,6 +1445,7 @@
 		grid-template-columns: 1fr;
 		grid-template-areas:
 			'summary'
+			'processes'
 			'logs';
 		gap: 0.9rem;
 		padding-top: 0.95rem;
@@ -1234,6 +1470,10 @@
 
 	.log-card {
 		grid-area: logs;
+	}
+
+	.process-card {
+		grid-area: processes;
 	}
 
 	.pill {
@@ -1284,6 +1524,7 @@
 	}
 
 	.compact-list,
+	.process-list,
 	.log-list {
 		display: flex;
 		min-height: 0;
@@ -1361,6 +1602,113 @@
 
 	.log-message {
 		color: #dce0e5;
+	}
+
+	.process-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+		border-radius: 0.75rem;
+		padding: 0.7rem;
+		background: rgba(255, 255, 255, 0.015);
+	}
+
+	.process-heading {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+
+	.process-replica {
+		border-radius: 999px;
+		padding: 0.18rem 0.48rem;
+		background: rgba(255, 255, 255, 0.06);
+		color: #c6cbd2;
+		font-size: 0.7rem;
+		font-weight: 700;
+	}
+
+	.process-table {
+		display: flex;
+		flex-direction: column;
+		gap: 0.18rem;
+		overflow: auto;
+	}
+
+	.process-cards {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.process-item {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		border-radius: 0.55rem;
+		background: rgba(255, 255, 255, 0.02);
+		padding: 0.6rem;
+	}
+
+	.process-meta {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(4.5rem, max-content));
+		gap: 0.45rem;
+	}
+
+	.process-meta-item {
+		display: flex;
+		flex-direction: column;
+		gap: 0.12rem;
+		border-radius: 0.5rem;
+		background: rgba(255, 255, 255, 0.04);
+		padding: 0.45rem 0.5rem;
+	}
+
+	.process-meta-label {
+		font-size: 0.66rem;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: #98a0a8;
+	}
+
+	.process-meta-item strong,
+	.command-name {
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: #eceff2;
+	}
+
+	.command-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.55rem;
+		border-radius: 0.6rem;
+		background: rgba(255, 255, 255, 0.03);
+		padding: 0.65rem 0.7rem;
+	}
+
+	.command-path {
+		font-size: 0.68rem;
+		color: #9199a2;
+		font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+		word-break: break-all;
+	}
+
+	.command-line {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0.45rem;
+	}
+
+	.command-inline-args {
+		font-size: 0.74rem;
+		color: #b4bac2;
+		font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+		word-break: break-word;
 	}
 
 	.empty-state {

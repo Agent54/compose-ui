@@ -50,6 +50,17 @@ export type ComposeService = {
 	health?: 'healthy' | 'unhealthy';
 };
 
+export type ComposeProcessSnapshot = {
+	id: string;
+	projectId: string;
+	containerId: string;
+	containerName: string;
+	serviceName: string;
+	replica?: string;
+	titles: string[];
+	processes: string[][];
+};
+
 export type LogEntry = {
 	id: string;
 	projectId: string;
@@ -70,6 +81,7 @@ export type UiState = {
 	filter: string;
 	sortBy: 'path' | 'name' | 'status';
 	selectedProjectId: string;
+	selectedContainerId: string;
 	status: ConnectionStatus;
 	statusDetail: string;
 };
