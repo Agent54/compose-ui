@@ -1,4 +1,9 @@
-import { createCollection, localOnlyCollectionOptions, localStorageCollectionOptions } from '@tanstack/db';
+import {
+	createCollection,
+	localOnlyCollectionOptions,
+	localStorageCollectionOptions,
+	type LoadSubsetOptions
+} from '@tanstack/db';
 
 import { loadProjectServices } from './api';
 import { initialLogs, initialProjects, initialServices, initialUiState } from './sample-data';
@@ -129,7 +134,91 @@ function clearServicesForProjects(projectIds: string[]) {
 	serviceSyncCommit();
 }
 
-async function syncProjectServices(projectIds?: string[], force = false) {
+function isProjectIdRef(expression: unknown) {
+	if (!expression || typeof expression !== 'object') {
+		return false;
+	}
+
+	const candidate = expression as { type?: string; path?: string[] };
+	return (
+		candidate.type === 'ref' &&
+		Array.isArray(candidate.path) &&
+		candidate.path[candidate.path.length - 1] === 'projectId'
+	);
+}
+
+function stringValues(expression: unknown): string[] {
+	if (!expression || typeof expression !== 'object') {
+		return [];
+	}
+
+	const candidate = expression as { type?: string; value?: unknown };
+
+	if (candidate.type !== 'val') {
+		return [];
+	}
+
+	if (typeof candidate.value === 'string') {
+		const value = candidate.value.trim();
+		return value ? [value] : [];
+	}
+
+	if (Array.isArray(candidate.value)) {
+		return candidate.value.reduce<string[]>((values, entry) => {
+			if (typeof entry === 'string' && entry.trim()) {
+				values.push(entry.trim());
+			}
+
+			return values;
+		}, []);
+	}
+
+	return [];
+}
+
+function collectProjectIds(expression: unknown, ids = new Set<string>()) {
+	if (!expression || typeof expression !== 'object') {
+		return ids;
+	}
+
+	const candidate = expression as { type?: string; name?: string; args?: unknown[] };
+
+	if (candidate.type !== 'func' || !Array.isArray(candidate.args)) {
+		return ids;
+	}
+
+	if ((candidate.name === 'eq' || candidate.name === 'inArray') && candidate.args.length >= 2) {
+		const [left, right] = candidate.args;
+
+		if (isProjectIdRef(left)) {
+			for (const value of stringValues(right)) {
+				ids.add(value);
+			}
+		}
+
+		if (candidate.name === 'eq' && isProjectIdRef(right)) {
+			for (const value of stringValues(left)) {
+				ids.add(value);
+			}
+		}
+	}
+
+	for (const arg of candidate.args) {
+		collectProjectIds(arg, ids);
+	}
+
+	return ids;
+}
+
+function extractProjectIds(options?: LoadSubsetOptions) {
+	return [...collectProjectIds(options?.where)];
+}
+
+async function syncProjectServices(
+	options?: LoadSubsetOptions,
+	projectIds?: string[],
+	force = false
+) {
 	const ui = uiStateCollection.state.get('app');
 
 	if (!ui) {
@@ -137,7 +226,14 @@ async function syncProjectServices(projectIds?: string[], force = false) {
 	}
 
 	const settings = settingsCollection.state.get('localstorage');
-	const targetIds = [...new Set(projectIds ?? settings?.expandedProjectIds ?? [])];
+	const requestedProjectIds = projectIds?.length ? projectIds : extractProjectIds(options);
+	const targetIds = [
+		...new Set(
+			requestedProjectIds.length
+				? [...requestedProjectIds, ...(settings?.expandedProjectIds ?? [])]
+				: (settings?.expandedProjectIds ?? [])
+		)
+	];
 	const projects = targetIds
 		.map((projectId) => projectsCollection.state.get(projectId))
 		.filter(Boolean) as ComposeProject[];
@@ -210,7 +306,7 @@ export const servicesCollection = createCollection({
 			markReady();
 
 			return {
-				loadSubset: () => syncProjectServices()
+				loadSubset: (options) => syncProjectServices(options)
 			};
 		}
 	}
@@ -312,14 +408,16 @@ export function hydrateProjects(projects: ComposeProject[], services: ComposeSer
 export function invalidateProjectServices(projectId?: string) {
 	if (projectId) {
 		loadedServicePaths.delete(projectId);
+		serviceLoadSignature = '';
 		return;
 	}
 
 	loadedServicePaths.clear();
+	serviceLoadSignature = '';
 }
 
 export async function reloadProjectServices(projectIds?: string[]) {
-	await syncProjectServices(projectIds, true);
+	await syncProjectServices(undefined, projectIds, true);
 }
 
 export function appendLog(projectId: string, level: LogEntry['level'], message: string) {

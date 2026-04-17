@@ -69,6 +69,51 @@ function joinUrl(serverUrl: string, version: string, path: string) {
 	return `${base}/v${normalizeVersion(version)}${path}`;
 }
 
+function summarizeErrorPayload(payload: unknown): string {
+	if (typeof payload === 'string') {
+		return payload.trim();
+	}
+
+	if (!payload || typeof payload !== 'object') {
+		return '';
+	}
+
+	const objectPayload = payload as Record<string, unknown>;
+
+	for (const key of ['message', 'error', 'detail', 'reason']) {
+		const value = objectPayload[key];
+
+		if (typeof value === 'string' && value.trim()) {
+			return value.trim();
+		}
+	}
+
+	return '';
+}
+
+async function responseError(action: string, response: Response): Promise<Error> {
+	let detail = '';
+
+	try {
+		const text = (await response.text()).trim();
+
+		if (text) {
+			try {
+				detail = summarizeErrorPayload(JSON.parse(text)) || text;
+			} catch {
+				detail = text;
+			}
+		}
+	} catch {
+		detail = '';
+	}
+
+	const statusSuffix = response.statusText ? ` ${response.statusText}` : '';
+	const baseMessage = `${action} failed (${response.status}${statusSuffix})`;
+
+	return new Error(detail ? `${baseMessage}: ${detail}` : baseMessage);
+}
+
 function toProject(raw: ListedProject, index: number): ComposeProject {
 	const name = raw.Name ?? raw.name ?? raw.project ?? raw.ID ?? raw.id ?? `project-${index + 1}`;
 	const sourceId = raw.ID ?? raw.id ?? name;
@@ -119,6 +164,18 @@ function parseProjects(payload: unknown) {
 	return [];
 }
 
+function firstNonEmptyString(...values: unknown[]) {
+	for (const value of values) {
+		const normalized = String(value ?? '').trim();
+
+		if (normalized) {
+			return normalized;
+		}
+	}
+
+	return '';
+}
+
 function parseServiceState(rawState: string, rawStatus: string): ComposeService['state'] {
 	const state = rawState.trim().toLowerCase();
 	const status = rawStatus.trim().toLowerCase();
@@ -137,6 +194,10 @@ function parseServiceState(rawState: string, rawStatus: string): ComposeService[
 
 	if (state === 'created') {
 		return 'created';
+	}
+
+	if (state === 'uncreated' || status === 'uncreated') {
+		return 'uncreated';
 	}
 
 	return 'unknown';
@@ -177,12 +238,24 @@ function parseContainerName(raw: ListedContainer, fallback: string) {
 }
 
 function toService(raw: ListedContainer, project: ComposeProject, index: number): ComposeService {
-	const serviceName = String(raw.Service ?? raw.service ?? raw.Name ?? raw.name ?? `service-${index + 1}`);
+	const serviceName = firstNonEmptyString(
+		raw.Service,
+		raw.service,
+		raw.Name,
+		raw.name,
+		`service-${index + 1}`
+	);
 	const containerName = parseContainerName(
 		raw,
-		String(raw.Name ?? raw.name ?? serviceName)
+		firstNonEmptyString(raw.Name, raw.name, serviceName)
 	);
-	const containerId = String(raw.ID ?? raw.Id ?? raw.id ?? `${project.id}-${serviceName}-${index + 1}`);
+	const containerId = firstNonEmptyString(
+		raw.ID,
+		raw.Id,
+		raw.id,
+		containerName,
+		`${project.id}-${serviceName}-${index + 1}`
+	);
 	const rawState = String(raw.State ?? raw.state ?? '').trim();
 	const rawStatus = String(raw.Status ?? raw.status ?? rawState).trim();
 
@@ -280,7 +353,7 @@ export async function refreshProjectsFromServer(ui: UiState): Promise<RefreshRes
 	});
 
 	if (!response.ok) {
-		throw new Error(`ls returned ${response.status}`);
+		throw await responseError('Listing projects', response);
 	}
 
 	const payload = (await response.json()) as unknown;
@@ -301,7 +374,7 @@ export async function checkHealth(ui: UiState) {
 	});
 
 	if (!response.ok) {
-		throw new Error(`/_ping returned ${response.status}`);
+		throw await responseError('Checking /_ping', response);
 	}
 }
 
@@ -315,7 +388,7 @@ export async function startProject(ui: UiState, path: string, watching: boolean)
 	});
 
 	if (!response.ok) {
-		throw new Error(`up returned ${response.status}`);
+		throw await responseError('Starting project via /up', response);
 	}
 }
 
@@ -335,7 +408,7 @@ async function postProjectAction(
 	});
 
 	if (!response.ok) {
-		throw new Error(`${endpoint} returned ${response.status}`);
+		throw await responseError(`Running /${endpoint} for ${projectId}`, response);
 	}
 }
 
@@ -397,7 +470,7 @@ export async function loadProjectServices(
 	);
 
 	if (!response.ok) {
-		throw new Error(`ps returned ${response.status}`);
+		throw await responseError(`Loading /ps for ${project.id}`, response);
 	}
 
 	const payload = (await response.json()) as unknown;
@@ -421,7 +494,7 @@ export async function loadProjectProcesses(
 	);
 
 	if (!response.ok) {
-		throw new Error(`top returned ${response.status}`);
+		throw await responseError(`Loading /top for ${project.id}`, response);
 	}
 
 	const payload = (await response.json()) as unknown;
@@ -438,7 +511,7 @@ export async function startWatching(ui: UiState, project: string, path?: string)
 	});
 
 	if (!response.ok) {
-		throw new Error(`watch returned ${response.status}`);
+		throw await responseError(`Starting watch for ${project}`, response);
 	}
 }
 
@@ -448,6 +521,6 @@ export async function stopWatching(ui: UiState, project: string) {
 	});
 
 	if (!response.ok) {
-		throw new Error(`stop watching returned ${response.status}`);
+		throw await responseError(`Stopping watch for ${project}`, response);
 	}
 }

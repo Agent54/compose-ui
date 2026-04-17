@@ -45,7 +45,7 @@ export type ComposeService = {
 	name: string;
 	serviceName: string;
 	containerName: string;
-	state: 'running' | 'exited' | 'paused' | 'created' | 'unknown';
+	state: 'running' | 'exited' | 'paused' | 'created' | 'uncreated' | 'unknown';
 	stateText: string;
 	health?: 'healthy' | 'unhealthy';
 };
@@ -64,7 +64,7 @@ export type ComposeProcessSnapshot = {
 export type LogEntry = {
 	id: string;
 	projectId: string;
-	level: 'ok' | 'info' | 'warn';
+	level: 'ok' | 'info' | 'warn' | 'error';
 	time: string;
 	message: string;
 };

@@ -4,6 +4,7 @@
 	import { onMount } from 'svelte';
 
 	import Icon from '$lib/components/Icon.svelte';
+	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
 	import {
 		appendLog,
 		checkHealth,
@@ -20,7 +21,6 @@
 		pauseServices,
 		projectsCollection,
 		refreshProjectsFromServer,
-		reloadProjectServices,
 		selectContainer,
 		selectProject,
 		settingsCollection,
@@ -156,9 +156,18 @@
 	const selectedProject = $derived.by(
 		() => visibleProjects.find((project) => project.id === selectedProjectId) ?? visibleProjects[0]
 	);
+	const selectedProjectServicesQuery = useLiveQuery(
+		(q) =>
+			q
+				.from({ services: servicesCollection })
+				.where(({ services }) => eq(services.projectId, selectedProjectId || '__none__'))
+				.orderBy(({ services }) => services.serviceName)
+				.orderBy(({ services }) => services.containerName),
+		[() => selectedProjectId]
+	);
 
 	const selectedServices = $derived(
-		selectedProject ? servicesByProject.get(selectedProject.id) ?? [] : []
+		(selectedProjectServicesQuery.data ?? []) as ComposeService[]
 	);
 	const selectedContainer = $derived(
 		selectedContainerId
@@ -213,6 +222,10 @@
 			return;
 		}
 
+		if (!selectedProjectServicesQuery.isReady) {
+			return;
+		}
+
 		if (!selectedContainer || selectedContainer.projectId !== selectedProjectId) {
 			updateUiState({ selectedContainerId: '' });
 		}
@@ -261,10 +274,6 @@
 
 	function projectServices(projectId: string) {
 		return servicesByProject.get(projectId) ?? [];
-	}
-
-	function hasLoadedProjectServices(projectId: string) {
-		return openProjectRows.some((row) => row.project.id === projectId);
 	}
 
 	const visibleProcessSnapshots = $derived(
@@ -353,7 +362,7 @@
 
 		if (services.length) {
 			return services.some((service) =>
-				['exited', 'created', 'unknown'].includes(service.state)
+				['exited', 'created', 'uncreated', 'unknown'].includes(service.state)
 			);
 		}
 
@@ -423,10 +432,18 @@
 			return 'service-state-paused';
 		}
 
+		if (service.state === 'uncreated') {
+			return 'service-state-uncreated';
+		}
+
 		return 'service-state-exited';
 	}
 
 	function serviceStateIcon(service: ComposeService) {
+		if (service.state === 'uncreated') {
+			return 'dotted-circle';
+		}
+
 		if (service.state === 'paused') {
 			return 'pause';
 		}
@@ -436,6 +453,14 @@
 		}
 
 		return 'stop';
+	}
+
+	function errorMessage(error: unknown, fallback: string) {
+		if (error instanceof Error && error.message.trim()) {
+			return error.message.trim();
+		}
+
+		return fallback;
 	}
 
 	async function refresh() {
@@ -452,21 +477,17 @@
 			hydrateProjects(result.projects, result.services);
 			invalidateProjectServices();
 
-			if (expandedProjectIdList.length) {
-				await reloadProjectServices(expandedProjectIdList);
-			}
-
 			setConnectionState('connected', 'Compose API reachable and synchronized.');
 
 			if (selectedProjectId) {
 				appendLog(selectedProjectId, 'ok', 'Refreshed project list from the Compose API.');
 			}
 		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Server unavailable';
-			setConnectionState('error', `Compose API unavailable at http://127.0.0.1:8094 (${message}).`);
+			const message = errorMessage(error, 'Server unavailable');
+			setConnectionState('error', `Compose API unavailable at http://127.0.0.1:8094. ${message}`);
 
 			if (selectedProjectId) {
-				appendLog(selectedProjectId, 'warn', 'Compose API unavailable.');
+				appendLog(selectedProjectId, 'error', `Compose API unavailable. ${message}`);
 			}
 		} finally {
 			refreshing = false;
@@ -475,11 +496,6 @@
 
 	async function syncAfterAction(project: ComposeProject, logMessage: string) {
 		await refresh();
-
-		if (expandedProjectIds.has(project.id)) {
-			await reloadProjectServices([project.id]);
-		}
-
 		appendLog(project.id, 'ok', logMessage);
 	}
 
@@ -512,16 +528,13 @@
 				await syncAfterAction(project, `Started services for ${project.name}.`);
 				setConnectionState('connected', `Started ${project.name}.`);
 			}
-		} catch {
-			setConnectionState(
-				'error',
+		} catch (error) {
+			const message = errorMessage(
+				error,
 				`Failed to ${shouldStop ? 'stop' : 'start'} ${service?.serviceName ?? project.name}.`
 			);
-			appendLog(
-				project.id,
-				'warn',
-				`Failed to ${shouldStop ? 'stop' : 'start'} ${service?.serviceName ?? project.name}.`
-			);
+			setConnectionState('error', message);
+			appendLog(project.id, 'error', message);
 		} finally {
 			busyAction = null;
 		}
@@ -552,16 +565,13 @@
 				);
 				setConnectionState('connected', `Paused ${service?.serviceName ?? project.name}.`);
 			}
-		} catch {
-			setConnectionState(
-				'error',
+		} catch (error) {
+			const message = errorMessage(
+				error,
 				`Failed to ${isUnpause ? 'resume' : 'pause'} ${service?.serviceName ?? project.name}.`
 			);
-			appendLog(
-				project.id,
-				'warn',
-				`Failed to ${isUnpause ? 'resume' : 'pause'} ${service?.serviceName ?? project.name}.`
-			);
+			setConnectionState('error', message);
+			appendLog(project.id, 'error', message);
 		} finally {
 			busyAction = null;
 		}
@@ -589,16 +599,13 @@
 				'connected',
 				`${nextWatching ? 'Watching' : 'Stopped watching'} ${project.name}.`
 			);
-		} catch {
-			setConnectionState(
-				'error',
+		} catch (error) {
+			const message = errorMessage(
+				error,
 				`${nextWatching ? 'Failed to start watching' : 'Failed to stop watching'} ${project.name}.`
 			);
-			appendLog(
-				project.id,
-				'warn',
-				`${nextWatching ? 'Failed to start watching' : 'Failed to stop watching'} ${project.name}.`
-			);
+			setConnectionState('error', message);
+			appendLog(project.id, 'error', message);
 		} finally {
 			busyAction = null;
 		}
@@ -672,7 +679,7 @@
 				{#each visibleProjects as project (project.id)}
 					<div class="project-group">
 						<div
-							class:selected={selectedProject?.id === project.id}
+							class:selected={selectedProject?.id === project.id && !selectedContainerId}
 							class="project-row"
 							role="treeitem"
 							aria-selected={selectedProject?.id === project.id}
@@ -736,81 +743,15 @@
 						</div>
 
 						{#if expandedProjectIds.has(project.id)}
-							<div class="service-list">
-								{#if projectServices(project.id).length}
-									{#each projectServices(project.id) as service (service.id)}
-										<div class:selected={selectedContainerId === service.id} class="service-row">
-											<button
-												class="service-button"
-												type="button"
-												aria-label={`Select ${service.serviceName}`}
-												onmousedown={() => handleContainerSelect(project.id, service.id)}
-											>
-												<span class={`service-state ${serviceStateTone(service)}`}>
-													<Icon name={serviceStateIcon(service)} size={13} />
-												</span>
-												<div class="service-copy">
-													<div class="service-title">
-														<span>{service.serviceName}</span>
-														<span class="service-container">{service.containerName}</span>
-													</div>
-													<div class="service-subtitle">
-														{service.stateText}
-														{#if service.health}
-															<span class="health-tag">({service.health})</span>
-														{/if}
-													</div>
-												</div>
-											</button>
-
-											<div class="row-actions">
-												{#if ['exited', 'created', 'unknown', 'running', 'paused'].includes(service.state)}
-													<button
-														class="overlay-button"
-														type="button"
-														aria-label={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
-														onmousedown={() => handleStartStopToggle(project, service)}
-														disabled={busyAction !== null}
-													>
-														<Icon
-															name={service.state === 'running' || service.state === 'paused' ? 'stop' : 'play'}
-															size={13}
-														/>
-													</button>
-												{/if}
-
-												{#if service.state === 'running' || service.state === 'paused'}
-													<button
-														class="overlay-button"
-														type="button"
-														aria-label={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
-														onmousedown={() => handlePauseToggle(project, service)}
-														disabled={busyAction !== null}
-													>
-														<Icon name={service.state === 'paused' ? 'play' : 'pause'} size={13} />
-													</button>
-												{/if}
-
-												<button
-													class="overlay-button"
-													type="button"
-													aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
-													onmousedown={() => handleWatchingToggle(project)}
-													disabled={busyAction !== null}
-												>
-													<Icon name="eye" size={13} />
-												</button>
-											</div>
-										</div>
-									{/each}
-								{:else}
-									<div class="service-empty">
-										{hasLoadedProjectServices(project.id)
-											? 'No containers returned by /ps.'
-											: 'Loading containers…'}
-									</div>
-								{/if}
-							</div>
+							<ProjectServicesList
+								{project}
+								{selectedContainerId}
+								{busyAction}
+								onContainerSelect={handleContainerSelect}
+								onStartStop={handleStartStopToggle}
+								onPauseToggle={handlePauseToggle}
+								onWatchingToggle={handleWatchingToggle}
+							/>
 						{/if}
 					</div>
 				{/each}
@@ -980,10 +921,10 @@
 			<section class="card log-card">
 				<div class="card-header">
 					<div>
-						<p class="eyebrow">Watching</p>
+						<p class="eyebrow">Activity</p>
 						<h3>{selectedProject?.name ?? 'No project selected'}</h3>
 					</div>
-					<div class="log-hint">Live watching stream</div>
+					<div class="log-hint">Recent project activity</div>
 				</div>
 
 				{#if selectedLogs.length}
@@ -997,7 +938,7 @@
 						{/each}
 					</div>
 				{:else}
-					<div class="empty-state">No watching output yet.</div>
+					<div class="empty-state">No activity yet.</div>
 				{/if}
 			</section>
 		</div>
@@ -1186,8 +1127,19 @@
 		overflow: visible;
 	}
 
-	.project-row.selected {
+	.project-row.selected::before {
+		content: '';
+		position: absolute;
+		inset: 0 0 0 calc(1.8rem - 7px);
+		border-radius: 0.5rem;
 		background: rgba(255, 255, 255, 0.05);
+		pointer-events: none;
+	}
+
+	.toggle,
+	.project-button {
+		position: relative;
+		z-index: 1;
 	}
 
 	.project-button {
@@ -1253,7 +1205,6 @@
 
 	.service-list {
 		margin-left: 1.9rem;
-		border-left: 1px solid rgba(255, 255, 255, 0.08);
 		padding: 0.08rem 0 0.28rem 0.68rem;
 	}
 
@@ -1268,6 +1219,7 @@
 
 	.service-row.selected {
 		background: rgba(255, 255, 255, 0.05);
+		padding-left: 7px;
 	}
 
 	.service-button {
@@ -1300,6 +1252,10 @@
 
 	.service-state-exited {
 		color: #c66c6b;
+	}
+
+	.service-state-uncreated {
+		color: #7b8087;
 	}
 
 	.service-copy {
@@ -1342,8 +1298,7 @@
 		z-index: 3;
 	}
 
-	.project-row:hover .row-actions,
-	.service-row:hover .row-actions {
+	.project-row:hover .row-actions {
 		opacity: 1;
 		pointer-events: auto;
 	}
@@ -1592,6 +1547,11 @@
 	.log-warn {
 		background: rgba(160, 115, 65, 0.18);
 		color: #f0cf9f;
+	}
+
+	.log-error {
+		background: rgba(141, 61, 61, 0.2);
+		color: #ffb6b3;
 	}
 
 	.log-time {
