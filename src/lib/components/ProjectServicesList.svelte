@@ -93,7 +93,7 @@
 		{#each services as service (service.id)}
 			<div class:selected={selectedContainerId === service.id} class="service-row">
 				<button
-					class="service-button"
+					class="service-button row-tooltip"
 					type="button"
 					aria-label={`Select ${service.serviceName}`}
 					data-tooltip={service.containerName}
@@ -337,18 +337,20 @@
 		position: absolute;
 		top: calc(100% + 0.42rem);
 		bottom: auto;
-		max-width: min(18rem, calc(100vw - 2rem));
+		width: max-content;
+		max-width: min(18rem, calc(100cqw - 1rem));
 		padding: 0.36rem 0.52rem;
-		border: 1px solid rgba(255, 255, 255, 0.14);
+		border: 1px solid rgba(255, 255, 255, 0.18);
 		border-radius: 0.45rem;
-		background: rgba(8, 8, 9, 0.98);
-		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+		background: #090a0c;
+		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
 		color: #eef1f4;
 		font-size: 0.72rem;
 		line-height: 1.2;
-		white-space: normal;
+		white-space: pre-line;
 		text-align: left;
-		overflow-wrap: anywhere;
+		overflow-wrap: break-word;
+		word-break: normal;
 		pointer-events: none;
 		z-index: 20;
 	}
@@ -360,9 +362,15 @@
 	}
 
 	[data-tooltip]:not([data-tooltip='']):hover::after {
+		left: auto;
+		right: 0;
+		transform: none;
+	}
+
+	.row-tooltip[data-tooltip]:hover::after {
 		left: 0;
 		right: auto;
-		transform: none;
+		max-width: min(18rem, calc(100cqw - 2.4rem));
 	}
 
 	.service-empty {

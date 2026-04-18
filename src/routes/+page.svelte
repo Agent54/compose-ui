@@ -442,6 +442,26 @@
 		return label || project.statusLabel;
 	}
 
+	function shouldShowProjectRowStatus(project: ComposeProject) {
+		const matches = [...project.statusLabel.matchAll(/([a-z-]+)(?:\((\d+)\))?/gi)];
+
+		if (matches.length !== 1) {
+			return true;
+		}
+
+		const normalized = normalizeProjectStatusState(matches[0]?.[1] ?? '');
+		return (
+			normalized !== 'running' &&
+			normalized !== 'paused' &&
+			normalized !== 'exited' &&
+			normalized !== 'uncreated'
+		);
+	}
+
+	function projectRowTooltipText(project: ComposeProject) {
+		return `${project.name}\n${project.statusLabel}`;
+	}
+
 	function projectIconTone(project: ComposeProject) {
 		const aggregateState = projectAggregateState(project);
 
@@ -1083,13 +1103,20 @@
 								<Icon name="chevron" size={13} rotated={expandedProjectIds.has(project.id)} />
 							</button>
 
-							<button class="project-button" type="button" onmousedown={() => handleProjectSelect(project.id)}>
+							<button
+								class="project-button tooltip-anchor row-tooltip"
+								type="button"
+								data-tooltip={projectRowTooltipText(project)}
+								onmousedown={() => handleProjectSelect(project.id)}
+							>
 								<span class="project-copy">
 									<span class="project-name">
 										<Icon name="container" size={14} class={projectIconTone(project)} />
 										{project.name}
 									</span>
-									<span class="project-status">{projectRowStatusLabel(project)}</span>
+									{#if shouldShowProjectRowStatus(project)}
+										<span class="project-status">{projectRowStatusLabel(project)}</span>
+									{/if}
 								</span>
 								<span class="project-meta">
 									{#if project.watching}
@@ -1381,6 +1408,7 @@
 		display: flex;
 		min-height: 0;
 		flex-direction: column;
+		container-type: inline-size;
 		border-right: 1px solid rgba(255, 255, 255, 0.08);
 		background:
 			linear-gradient(180deg, rgba(14, 14, 15, 0.99), rgba(8, 8, 9, 0.99)),
@@ -1838,18 +1866,20 @@
 		position: absolute;
 		top: calc(100% + 0.42rem);
 		bottom: auto;
-		max-width: min(18rem, calc(100vw - 2rem));
+		width: max-content;
+		max-width: min(18rem, calc(100cqw - 1rem));
 		padding: 0.36rem 0.52rem;
-		border: 1px solid rgba(255, 255, 255, 0.14);
+		border: 1px solid rgba(255, 255, 255, 0.18);
 		border-radius: 0.45rem;
-		background: rgba(8, 8, 9, 0.98);
-		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+		background: #090a0c;
+		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
 		color: #eef1f4;
 		font-size: 0.72rem;
 		line-height: 1.2;
-		white-space: normal;
+		white-space: pre-line;
 		text-align: left;
-		overflow-wrap: anywhere;
+		overflow-wrap: break-word;
+		word-break: normal;
 		pointer-events: none;
 		z-index: 30;
 	}
@@ -1861,9 +1891,15 @@
 	}
 
 	[data-tooltip]:not([data-tooltip='']):hover::after {
+		left: auto;
+		right: 0;
+		transform: none;
+	}
+
+	.row-tooltip[data-tooltip]:hover::after {
 		left: 0;
 		right: auto;
-		transform: none;
+		max-width: min(18rem, calc(100cqw - 2.4rem));
 	}
 
 	.status-line[data-tooltip]:hover::after {
