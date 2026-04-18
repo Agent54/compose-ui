@@ -10,6 +10,7 @@
 		selectedContainerId,
 		busyAction,
 		buildingServiceId,
+		sortBy,
 		refreshEpoch,
 		onContainerSelect,
 		onStartStop,
@@ -21,6 +22,7 @@
 		selectedContainerId: string;
 		busyAction: string | null;
 		buildingServiceId?: string;
+		sortBy: 'path' | 'name' | 'status';
 		refreshEpoch: number;
 		onContainerSelect: (projectId: string, serviceId: string) => void;
 		onStartStop: (project: ComposeProject, service: ComposeService) => void;
@@ -33,13 +35,38 @@
 		(q) =>
 			q
 				.from({ services: servicesCollection })
-				.where(({ services }) => eq(services.projectId, project.id))
-				.orderBy(({ services }) => services.serviceName)
-				.orderBy(({ services }) => services.containerName),
+				.where(({ services }) => eq(services.projectId, project.id)),
 		[() => project.id, () => refreshEpoch]
 	);
 
-	const services = $derived((servicesQuery.data ?? []) as ComposeService[]);
+	function stateRank(state: ComposeService['state']) {
+		if (state === 'running') return 0;
+		if (state === 'paused') return 1;
+		if (state === 'exited') return 2;
+		if (state === 'created') return 3;
+		if (state === 'unknown') return 4;
+		if (state === 'uncreated') return 5;
+		return 6;
+	}
+
+	const services = $derived.by(() => {
+		const entries = [...((servicesQuery.data ?? []) as ComposeService[])];
+
+		return entries.sort((left, right) => {
+			if (sortBy === 'status') {
+				return (
+					stateRank(left.state) - stateRank(right.state) ||
+					left.serviceName.localeCompare(right.serviceName) ||
+					left.containerName.localeCompare(right.containerName)
+				);
+			}
+
+			return (
+				left.serviceName.localeCompare(right.serviceName) ||
+				left.containerName.localeCompare(right.containerName)
+			);
+		});
+	});
 
 	function serviceStateTone(service: ComposeService) {
 		if (service.state === 'running') {
@@ -127,7 +154,11 @@
 					}}
 				>
 					<span class={`service-state ${serviceStateTone(service)}`}>
-						<Icon name={serviceStateIcon(service)} size={13} />
+						<Icon
+							name={startButtonSpinning(service) ? 'refresh' : serviceStateIcon(service)}
+							size={13}
+							spinning={startButtonSpinning(service)}
+						/>
 					</span>
 					<div class="service-copy">
 						<span class="service-title">{service.serviceName}</span>
@@ -159,15 +190,8 @@
 							disabled={busyAction !== null}
 						>
 							<Icon
-								name={
-									startButtonSpinning(service)
-										? 'refresh'
-										: service.state === 'running' || service.state === 'paused'
-											? 'stop'
-											: 'play'
-								}
+								name={service.state === 'running' || service.state === 'paused' ? 'stop' : 'play'}
 								size={13}
-								spinning={startButtonSpinning(service)}
 							/>
 						</button>
 					</span>

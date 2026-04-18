@@ -285,6 +285,12 @@ function parseHealth(raw: ListedContainer): ComposeService['health'] {
 	return undefined;
 }
 
+function stripHealthSuffix(statusText: string) {
+	return statusText
+		.replace(/\s*\((healthy|unhealthy)\)\s*$/i, '')
+		.trim();
+}
+
 function parseContainerName(raw: ListedContainer, fallback: string) {
 	const names = raw.Names;
 
@@ -340,7 +346,7 @@ function toService(raw: ListedContainer, project: ComposeProject, index: number)
 		containerName,
 		composePath: parseComposePath(raw),
 		state: parseServiceState(rawState, rawStatus),
-		stateText: rawStatus || rawState || 'unknown',
+		stateText: stripHealthSuffix(rawStatus || rawState || 'unknown'),
 		health: parseHealth(raw)
 	};
 }

@@ -74,6 +74,16 @@
 		serviceId?: string;
 	};
 
+	type BuildStreamEntry = {
+		id: string;
+		buildId: string;
+		projectId: string;
+		time: string;
+		source: string;
+		stream: string;
+		message: string;
+	};
+
 	const DEFAULT_SIDEBAR_WIDTH = 352;
 	const MIN_SIDEBAR_WIDTH = 248;
 	const MIN_PANEL_WIDTH = 320;
@@ -84,6 +94,7 @@
 	let searchInput: HTMLInputElement | null = null;
 	let dragSidebarWidth = $state<number | null>(null);
 	let activeBuildTargets = $state<Record<string, ActiveBuildTarget>>({});
+	let buildStreamEntries = $state<BuildStreamEntry[]>([]);
 	const buildEventSources = new Map<string, EventSource>();
 
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
@@ -191,6 +202,11 @@
 					(build) =>
 						build.projectId === selectedProject.id || build.projectName === selectedProject.name
 				)
+			: []
+	);
+	const selectedBuildEntries = $derived(
+		selectedProject
+			? buildStreamEntries.filter((entry) => entry.projectId === selectedProject.id).slice().reverse()
 			: []
 	);
 	const selectedLogs = $derived(
@@ -346,6 +362,10 @@
 		return build.status === 'succeeded' ? 'succeeded' : 'failed';
 	}
 
+	function buildRowTitle(build: ComposeBuild) {
+		return build.projectName ? `${build.projectName} build #${build.id}` : `Build #${build.id}`;
+	}
+
 	function setActiveBuildTarget(buildId: string, target: ActiveBuildTarget | null) {
 		const nextTargets = { ...activeBuildTargets };
 
@@ -384,18 +404,6 @@
 			busyAction === `start:${project.id}:${service.id}` ||
 			busyAction === `up-no-build:${project.id}:${service.id}`
 		);
-	}
-
-	function buildLogLevel(stream: string, message: string): LogEntry['level'] {
-		if (stream === 'stderr') {
-			return 'warn';
-		}
-
-		if (/fail|error/i.test(message)) {
-			return 'error';
-		}
-
-		return stream === 'status' ? 'info' : 'ok';
 	}
 
 	async function refreshBuildState() {
@@ -460,6 +468,7 @@
 					stream?: string;
 					source?: string;
 					message?: string;
+					time?: string;
 				};
 				const projectId = String(payload.project ?? build.projectId).trim() || build.projectId;
 				const sourceLabel = String(payload.source ?? '').trim();
@@ -469,11 +478,18 @@
 					return;
 				}
 
-				appendLog(
-					projectId,
-					buildLogLevel(String(payload.stream ?? ''), message),
-					sourceLabel ? `[${sourceLabel}] ${message}` : message
-				);
+				buildStreamEntries = [
+					...buildStreamEntries,
+					{
+						id: `${build.id}-${Date.now()}-${crypto.randomUUID()}`,
+						buildId: build.id,
+						projectId,
+						time: formatBuildTime(String(payload.time ?? '')) || formatBuildTime(new Date().toISOString()),
+						source: sourceLabel || 'Compose',
+						stream: String(payload.stream ?? ''),
+						message
+					}
+				];
 			} catch {
 				// Ignore malformed buffered messages.
 			}
@@ -486,6 +502,14 @@
 				if (!refreshedBuild || refreshedBuild.status !== 'running') {
 					closeBuildStream(build.id);
 					setActiveBuildTarget(build.id, null);
+
+					if (refreshedBuild) {
+						appendLog(
+							build.projectId,
+							refreshedBuild.status === 'failed' ? 'error' : 'ok',
+							`${buildRowTitle(refreshedBuild)} ${refreshedBuild.status === 'failed' ? 'failed' : 'succeeded'}.`
+						);
+					}
 					void refresh({ silent: true });
 				}
 			});
@@ -982,6 +1006,16 @@
 					serviceNames
 				);
 				if (startResult.buildId && startResult.buildUrl) {
+					appendLog(project.id, 'info', `${buildRowTitle({
+						id: startResult.buildId,
+						projectId: project.id,
+						projectName: project.name,
+						status: 'running',
+						startedAt: new Date().toISOString(),
+						finishedAt: null,
+						success: null,
+						streamUrl: startResult.buildUrl
+					})} started.`);
 					hydrateBuilds([
 						{
 							id: startResult.buildId,
@@ -1024,6 +1058,16 @@
 			} else if (project.state === 'uncreated') {
 				const startResult = await startProject(uiState, project.path, project.watching);
 				if (startResult.buildId && startResult.buildUrl) {
+					appendLog(project.id, 'info', `${buildRowTitle({
+						id: startResult.buildId,
+						projectId: project.id,
+						projectName: project.name,
+						status: 'running',
+						startedAt: new Date().toISOString(),
+						finishedAt: null,
+						success: null,
+						streamUrl: startResult.buildUrl
+					})} started.`);
 					hydrateBuilds([
 						{
 							id: startResult.buildId,
@@ -1228,44 +1272,58 @@
 		const canStop = projectCanStop(project);
 		const canPause = projectCanPause(project);
 		const canUnpause = isProjectFullyPaused(project);
+		const items: ContextMenuItem[] = [];
 
-		return [
-			{
+		if (canStart) {
+			items.push({
 				label: 'Start',
-				action: () => void handleStartStopToggle(project),
-				disabled: !canStart
-			},
-			{
+				action: () => void handleStartStopToggle(project)
+			});
+		}
+
+		if (canStop) {
+			items.push({
 				label: 'Stop',
-				action: () => void handleStartStopToggle(project),
-				disabled: !canStop
-			},
-			{
+				action: () => void handleStartStopToggle(project)
+			});
+		}
+
+		if (canPause && !canUnpause) {
+			items.push({
 				label: 'Pause',
-				action: () => void handlePauseToggle(project),
-				disabled: !canPause || canUnpause
-			},
-			{
+				action: () => void handlePauseToggle(project)
+			});
+		}
+
+		if (canUnpause) {
+			items.push({
 				label: 'Unpause',
-				action: () => void handlePauseToggle(project),
-				disabled: !canUnpause
-			},
-			{
+				action: () => void handlePauseToggle(project)
+			});
+		}
+
+		if (!project.watching) {
+			items.push({
 				label: 'Start watching',
-				action: () => void handleWatchingToggle(project),
-				disabled: project.watching
-			},
-			{
+				action: () => void handleWatchingToggle(project)
+			});
+		}
+
+		if (project.watching) {
+			items.push({
 				label: 'Stop watching',
-				action: () => void handleWatchingToggle(project),
-				disabled: !project.watching
-			},
-			{
+				action: () => void handleWatchingToggle(project)
+			});
+		}
+
+		if (canStartWithoutRebuild(project)) {
+			items.push({
 				label: 'Start without rebuilding',
-				action: () => void handleStartWithoutRebuild(project),
-				disabled: !canStartWithoutRebuild(project)
-			}
-		];
+				action: () => void handleStartWithoutRebuild(project)
+			});
+		}
+
+		return items;
 	}
 
 	function buildServiceContextMenuItems(
@@ -1276,44 +1334,58 @@
 		const canStop = service.state === 'running' || service.state === 'paused';
 		const canPause = service.state === 'running';
 		const canUnpause = service.state === 'paused';
+		const items: ContextMenuItem[] = [];
 
-		return [
-			{
+		if (canStart) {
+			items.push({
 				label: 'Start',
-				action: () => void handleStartStopToggle(project, service),
-				disabled: !canStart
-			},
-			{
+				action: () => void handleStartStopToggle(project, service)
+			});
+		}
+
+		if (canStop) {
+			items.push({
 				label: 'Stop',
-				action: () => void handleStartStopToggle(project, service),
-				disabled: !canStop
-			},
-			{
+				action: () => void handleStartStopToggle(project, service)
+			});
+		}
+
+		if (canPause) {
+			items.push({
 				label: 'Pause',
-				action: () => void handlePauseToggle(project, service),
-				disabled: !canPause
-			},
-			{
+				action: () => void handlePauseToggle(project, service)
+			});
+		}
+
+		if (canUnpause) {
+			items.push({
 				label: 'Unpause',
-				action: () => void handlePauseToggle(project, service),
-				disabled: !canUnpause
-			},
-			{
+				action: () => void handlePauseToggle(project, service)
+			});
+		}
+
+		if (!project.watching) {
+			items.push({
 				label: 'Start watching',
-				action: () => void handleWatchingToggle(project),
-				disabled: project.watching
-			},
-			{
+				action: () => void handleWatchingToggle(project)
+			});
+		}
+
+		if (project.watching) {
+			items.push({
 				label: 'Stop watching',
-				action: () => void handleWatchingToggle(project),
-				disabled: !project.watching
-			},
-			{
+				action: () => void handleWatchingToggle(project)
+			});
+		}
+
+		if (canStartWithoutRebuild(project, service)) {
+			items.push({
 				label: 'Start without rebuilding',
-				action: () => void handleStartWithoutRebuild(project, service),
-				disabled: !canStartWithoutRebuild(project, service)
-			}
-		];
+				action: () => void handleStartWithoutRebuild(project, service)
+			});
+		}
+
+		return items;
 	}
 
 	function openProjectContextMenu(event: MouseEvent, project: ComposeProject) {
@@ -1448,7 +1520,12 @@
 							>
 								<span class="project-copy">
 									<span class="project-name">
-										<Icon name="container" size={14} class={projectIconTone(project)} />
+										<Icon
+											name={projectStartButtonSpinning(project) ? 'refresh' : 'container'}
+											size={14}
+											class={projectIconTone(project)}
+											spinning={projectStartButtonSpinning(project)}
+										/>
 										{project.name}
 									</span>
 									{#if shouldShowProjectRowStatus(project)}
@@ -1482,17 +1559,7 @@
 											}}
 											disabled={busyAction !== null}
 										>
-											<Icon
-												name={
-													projectStartButtonSpinning(project)
-														? 'refresh'
-														: projectCanStop(project)
-															? 'stop'
-															: 'play'
-												}
-												size={13}
-												spinning={projectStartButtonSpinning(project)}
-											/>
+											<Icon name={projectCanStop(project) ? 'stop' : 'play'} size={13} />
 										</button>
 									</span>
 								{/if}
@@ -1543,6 +1610,7 @@
 								{selectedContainerId}
 								{busyAction}
 								buildingServiceId={activeBuildTarget(project.id)?.serviceId}
+								sortBy={uiState?.sortBy ?? 'status'}
 								refreshEpoch={serviceQueryEpoch}
 								onContainerSelect={handleContainerSelect}
 								onStartStop={handleStartStopToggle}
@@ -1622,6 +1690,9 @@
 										{service.state}
 									</span>
 									<span>{service.stateText}</span>
+									{#if service.health}
+										<span class="health-tag">({service.health})</span>
+									{/if}
 								</div>
 							</div>
 						{/each}
@@ -1701,9 +1772,9 @@
 				{/if}
 			</section>
 
-			<section class="card log-card">
+			<section class="card build-card">
 				<div class="card-header card-header-compact">
-					<p class="eyebrow">Project activity</p>
+					<p class="eyebrow">Build</p>
 				</div>
 
 				{#if selectedProjectBuilds.length}
@@ -1711,7 +1782,7 @@
 						{#each selectedProjectBuilds as build (build.id)}
 							<div class="build-row">
 								<div class="row-title">
-									Build #{build.id}
+									{buildRowTitle(build)}
 									{#if build.status === 'running'}
 										<Icon name="refresh" size={12} spinning={true} />
 									{/if}
@@ -1726,6 +1797,26 @@
 						{/each}
 					</div>
 				{/if}
+
+				{#if selectedBuildEntries.length}
+					<div class="build-stream-list">
+						{#each selectedBuildEntries as entry (entry.id)}
+							<div class="build-stream-row">
+								<span class="log-time">{entry.time}</span>
+								<span class="build-stream-source">{entry.source}</span>
+								<span class="log-message">{entry.message}</span>
+							</div>
+						{/each}
+					</div>
+				{:else if !selectedProjectBuilds.length}
+					<div class="empty-state">No build output yet.</div>
+				{/if}
+			</section>
+
+			<section class="card log-card">
+				<div class="card-header card-header-compact">
+					<p class="eyebrow">Project activity</p>
+				</div>
 
 				{#if selectedLogs.length}
 					<div class="log-list">
@@ -2523,6 +2614,7 @@
 		grid-template-areas:
 			'summary'
 			'processes'
+			'builds'
 			'logs';
 		align-content: start;
 		gap: 0.9rem;
@@ -2561,6 +2653,10 @@
 		grid-area: processes;
 	}
 
+	.build-card {
+		grid-area: builds;
+	}
+
 	.pill {
 		border-radius: 999px;
 		background: rgba(255, 255, 255, 0.06);
@@ -2583,6 +2679,7 @@
 
 	.compact-list,
 	.build-list,
+	.build-stream-list,
 	.process-list,
 	.log-list {
 		display: flex;
@@ -2594,6 +2691,7 @@
 
 	.compact-row,
 	.build-row,
+	.build-stream-row,
 	.log-row {
 		display: flex;
 		align-items: center;
@@ -2606,6 +2704,19 @@
 
 	.build-list {
 		margin-bottom: 0.4rem;
+	}
+
+	.build-stream-row {
+		justify-content: flex-start;
+		padding-inline: 0.7rem;
+		font-size: 0.78rem;
+	}
+
+	.build-stream-source {
+		min-width: 4.5rem;
+		color: #98a0a8;
+		font-size: 0.72rem;
+		font-weight: 600;
 	}
 
 	.row-tail {
