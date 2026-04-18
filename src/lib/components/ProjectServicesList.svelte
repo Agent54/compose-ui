@@ -335,10 +335,9 @@
 	[data-tooltip]:not([data-tooltip='']):hover::after {
 		content: attr(data-tooltip);
 		position: absolute;
-		left: 50%;
-		bottom: calc(100% + 0.42rem);
-		transform: translateX(-50%);
-		max-width: min(24rem, 70vw);
+		top: calc(100% + 0.42rem);
+		bottom: auto;
+		max-width: min(18rem, calc(100vw - 2rem));
 		padding: 0.36rem 0.52rem;
 		border: 1px solid rgba(255, 255, 255, 0.14);
 		border-radius: 0.45rem;
@@ -347,11 +346,23 @@
 		color: #eef1f4;
 		font-size: 0.72rem;
 		line-height: 1.2;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+		white-space: normal;
+		text-align: left;
+		overflow-wrap: anywhere;
 		pointer-events: none;
 		z-index: 20;
+	}
+
+	.tooltip-anchor[data-tooltip]:hover::after {
+		left: auto;
+		right: 0;
+		transform: none;
+	}
+
+	[data-tooltip]:not([data-tooltip='']):hover::after {
+		left: 0;
+		right: auto;
+		transform: none;
 	}
 
 	.service-empty {
