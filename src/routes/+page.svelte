@@ -1103,7 +1103,14 @@
 									</span>
 									<span class="project-status">{projectRowStatusLabel(project)}</span>
 								</span>
-								<span class="project-meta">{project.containerCount > 0 ? project.containerCount : ''}</span>
+								<span class="project-meta">
+									{#if project.watching}
+										<span class="project-watch-indicator" aria-label="Watching">
+											<Icon name="eye" size={12} />
+										</span>
+									{/if}
+									{project.containerCount > 0 ? project.containerCount : ''}
+								</span>
 							</button>
 
 							<div class="row-actions">
@@ -1152,7 +1159,7 @@
 										onmousedown={() => handleWatchingToggle(project)}
 										disabled={busyAction !== null}
 									>
-										<Icon name="eye" size={13} />
+										<Icon name={project.watching ? 'eye-off' : 'eye'} size={13} />
 									</button>
 								</span>
 							</div>
@@ -1629,6 +1636,10 @@
 	}
 
 	.project-meta {
+		display: inline-flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 0.22rem;
 		flex: none;
 		margin-left: auto;
 		min-width: 1.25rem;
@@ -1637,6 +1648,12 @@
 		font-weight: 700;
 		color: #848b94;
 		transform: translateX(-6px);
+	}
+
+	.project-watch-indicator {
+		display: inline-flex;
+		align-items: center;
+		color: #8fa4b5;
 	}
 
 	.service-list {

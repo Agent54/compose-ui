@@ -1,9 +1,10 @@
 <script lang="ts">
 	type IconName =
 		| 'chevron'
-	| 'container'
+		| 'container'
 		| 'dotted-circle'
 		| 'eye'
+		| 'eye-off'
 		| 'pause'
 		| 'play'
 		| 'refresh'
@@ -57,6 +58,11 @@
 	{:else if name === 'eye'}
 		<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
 		<circle cx="12" cy="12" r="2.5" />
+	{:else if name === 'eye-off'}
+		<path d="M3 3 21 21" />
+		<path d="M10.6 10.7a2.5 2.5 0 0 0 2.7 2.7" />
+		<path d="M9.4 5.1A10.7 10.7 0 0 1 12 4.8c6 0 9.5 7.2 9.5 7.2a17.2 17.2 0 0 1-3.1 4.1" />
+		<path d="M6.2 6.2A17.8 17.8 0 0 0 2.5 12s3.5 7.2 9.5 7.2a10.9 10.9 0 0 0 4.1-.8" />
 	{:else if name === 'play'}
 		<path d="m8 6 10 6-10 6z" />
 	{:else if name === 'pause'}

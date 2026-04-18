@@ -161,7 +161,7 @@
 							onmousedown={() => onWatchingToggle(project)}
 							disabled={busyAction !== null}
 						>
-							<Icon name="eye" size={13} />
+							<Icon name={project.watching ? 'eye-off' : 'eye'} size={13} />
 						</button>
 					</span>
 				</div>
