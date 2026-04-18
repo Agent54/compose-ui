@@ -1104,9 +1104,8 @@
 							</button>
 
 							<button
-								class="project-button tooltip-anchor row-tooltip"
+								class="project-button row-tooltip"
 								type="button"
-								data-tooltip={projectRowTooltipText(project)}
 								onmousedown={() => handleProjectSelect(project.id)}
 							>
 								<span class="project-copy">
@@ -1126,6 +1125,7 @@
 									{/if}
 									{project.containerCount > 0 ? project.containerCount : ''}
 								</span>
+								<span class="row-tooltip-bubble" aria-hidden="true">{projectRowTooltipText(project)}</span>
 							</button>
 
 							<div class="row-actions">
@@ -1866,6 +1866,10 @@
 		position: absolute;
 		display: block;
 		box-sizing: border-box;
+		isolation: isolate;
+		mix-blend-mode: normal;
+		backdrop-filter: none;
+		-webkit-backdrop-filter: none;
 		top: calc(100% + 0.42rem);
 		bottom: auto;
 		width: max-content;
@@ -1873,8 +1877,7 @@
 		padding: 0.36rem 0.52rem;
 		border: 1px solid rgba(255, 255, 255, 0.22);
 		border-radius: 0.45rem;
-		background-color: #050607;
-		background-image: none;
+		background: #050607 !important;
 		box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68);
 		color: #eef1f4;
 		font-size: 0.72rem;
@@ -1886,6 +1889,7 @@
 		opacity: 0;
 		visibility: hidden;
 		pointer-events: none;
+		will-change: opacity, transform;
 		transition:
 			opacity 120ms ease,
 			transform 120ms ease,
@@ -1912,10 +1916,46 @@
 		transform: translateY(0);
 	}
 
-	.row-tooltip[data-tooltip]:hover::after {
+	.row-tooltip {
+		overflow: visible;
+	}
+
+	.row-tooltip-bubble {
+		position: absolute;
+		top: calc(100% + 0.42rem);
 		left: 0;
-		right: auto;
+		z-index: 40;
+		display: block;
+		box-sizing: border-box;
+		width: max-content;
 		max-width: min(18rem, calc(100cqw - 2.4rem));
+		padding: 0.36rem 0.52rem;
+		border: 1px solid rgba(255, 255, 255, 0.22);
+		border-radius: 0.45rem;
+		background: #050607;
+		box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68);
+		color: #eef1f4;
+		font-size: 0.72rem;
+		line-height: 1.2;
+		white-space: pre-line;
+		text-align: left;
+		overflow-wrap: break-word;
+		word-break: normal;
+		opacity: 0;
+		visibility: hidden;
+		pointer-events: none;
+		transform: translateY(-2px);
+		transition:
+			opacity 120ms ease,
+			transform 120ms ease,
+			visibility 0s linear 140ms;
+	}
+
+	.row-tooltip:hover .row-tooltip-bubble {
+		opacity: 1;
+		visibility: visible;
+		transform: translateY(0);
+		transition-delay: 320ms, 320ms, 0s;
 	}
 
 	.status-line[data-tooltip]:hover::after {
