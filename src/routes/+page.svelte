@@ -10,6 +10,7 @@
 		buildsCollection,
 		checkHealth,
 		type ComposeBuild,
+		loadProjectConfig,
 		loadBuilds,
 		loadProjectProcesses,
 		type ComposeProcessSnapshot,
@@ -84,6 +85,13 @@
 		message: string;
 	};
 
+	type ConfigPanelState = {
+		open: boolean;
+		loading: boolean;
+		error: string;
+		content: string;
+	};
+
 	const DEFAULT_SIDEBAR_WIDTH = 352;
 	const MIN_SIDEBAR_WIDTH = 248;
 	const MIN_PANEL_WIDTH = 320;
@@ -95,6 +103,7 @@
 	let dragSidebarWidth = $state<number | null>(null);
 	let activeBuildTargets = $state<Record<string, ActiveBuildTarget>>({});
 	let buildStreamEntries = $state<BuildStreamEntry[]>([]);
+	let configPanels = $state<Record<string, ConfigPanelState>>({});
 	const buildEventSources = new Map<string, EventSource>();
 
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
@@ -364,6 +373,90 @@
 
 	function buildRowTitle(build: ComposeBuild) {
 		return build.projectName ? `${build.projectName} build #${build.id}` : `Build #${build.id}`;
+	}
+
+	function composeFilePaths(project: ComposeProject | undefined) {
+		if (!project?.path) {
+			return [];
+		}
+
+		return [...new Set(project.path.split(',').map((entry) => entry.trim()).filter(Boolean))];
+	}
+
+	function composeFileKey(projectId: string, filePath: string) {
+		return `${projectId}:${filePath}`;
+	}
+
+	function composeFileName(filePath: string) {
+		const parts = filePath.split('/').filter(Boolean);
+		return parts.at(-1) ?? filePath;
+	}
+
+	function composePanelState(projectId: string, filePath: string): ConfigPanelState {
+		return (
+			configPanels[composeFileKey(projectId, filePath)] ?? {
+				open: false,
+				loading: false,
+				error: '',
+				content: ''
+			}
+		);
+	}
+
+	async function toggleComposeConfig(project: ComposeProject, filePath: string) {
+		if (!uiState) {
+			return;
+		}
+
+		const key = composeFileKey(project.id, filePath);
+		const current = composePanelState(project.id, filePath);
+
+		if (current.open) {
+			configPanels = {
+				...configPanels,
+				[key]: {
+					...current,
+					open: false
+				}
+			};
+			return;
+		}
+
+		configPanels = {
+			...configPanels,
+			[key]: {
+				...current,
+				open: true,
+				loading: !current.content && !current.error
+			}
+		};
+
+		if (current.content || current.error) {
+			return;
+		}
+
+		try {
+			const content = await loadProjectConfig(uiState, project.id, filePath, 'yaml');
+			configPanels = {
+				...configPanels,
+				[key]: {
+					open: true,
+					loading: false,
+					error: '',
+					content
+				}
+			};
+		} catch (error) {
+			configPanels = {
+				...configPanels,
+				[key]: {
+					open: true,
+					loading: false,
+					error: errorMessage(error, `Failed to load config for ${composeFileName(filePath)}.`),
+					content: ''
+				}
+			};
+		}
 	}
 
 	function setActiveBuildTarget(buildId: string, target: ActiveBuildTarget | null) {
@@ -1663,10 +1756,7 @@
 		<div class="content-grid">
 			<section class="card summary-card">
 				<div class="card-header">
-					<div>
-						<p class="eyebrow">Project</p>
-						<h3>{selectedProject?.path ?? 'http://127.0.0.1:8094'}</h3>
-					</div>
+					<p class="eyebrow">Project</p>
 					<div class="pill-row">
 						<span class={`pill ${projectStateChipClass(selectedProject)}`}>
 							{selectedProject?.statusLabel ?? 'Unknown'}
@@ -1676,6 +1766,47 @@
 						</span>
 					</div>
 				</div>
+
+				{#if selectedProject && composeFilePaths(selectedProject).length}
+					<div class="config-list">
+						{#each composeFilePaths(selectedProject) as filePath (`${selectedProject.id}:${filePath}`)}
+							{@const panel = composePanelState(selectedProject.id, filePath)}
+							<div class="config-item">
+								<button
+									class="config-button"
+									type="button"
+									aria-pressed={panel.open}
+									onmousedown={(event) => {
+										if (!isPrimaryMouse(event)) return;
+										void toggleComposeConfig(selectedProject, filePath);
+									}}
+								>
+									<span class="config-copy">
+										<span class="row-title">
+											<Icon name="chevron" size={12} rotated={panel.open} />
+											{filePath}
+										</span>
+									</span>
+								</button>
+
+								{#if panel.open}
+									<div class="config-output">
+										{#if panel.loading}
+											<div class="config-output-state">
+												<Icon name="refresh" size={13} spinning={true} />
+												Loading parsed config…
+											</div>
+										{:else if panel.error}
+											<div class="config-output-state">{panel.error}</div>
+										{:else}
+											<pre>{panel.content}</pre>
+										{/if}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
 
 				{#if selectedServices.length}
 					<div class="compact-list">
@@ -1928,18 +2059,12 @@
 	}
 
 	h2,
-	h3,
 	p {
 		margin: 0;
 	}
 
 	h2 {
 		font-size: 1.05rem;
-		font-weight: 600;
-	}
-
-	h3 {
-		font-size: 0.94rem;
 		font-weight: 600;
 	}
 
@@ -2678,6 +2803,7 @@
 	}
 
 	.compact-list,
+	.config-list,
 	.build-list,
 	.build-stream-list,
 	.process-list,
@@ -2700,6 +2826,71 @@
 		border-radius: 0.65rem;
 		padding: 0.55rem 0.65rem;
 		background: rgba(255, 255, 255, 0.015);
+	}
+
+	.config-list {
+		margin-bottom: 0.65rem;
+	}
+
+	.config-item {
+		display: flex;
+		flex-direction: column;
+		gap: 0.12rem;
+	}
+
+	.config-button {
+		display: flex;
+		width: 100%;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.5rem 0.65rem;
+		border: 0;
+		border-radius: 0.65rem;
+		background: rgba(255, 255, 255, 0.015);
+		color: inherit;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.config-button:hover {
+		background: rgba(255, 255, 255, 0.03);
+	}
+
+	.config-copy {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		gap: 0.18rem;
+	}
+
+	.config-copy .row-title {
+		align-items: center;
+	}
+
+	.config-output {
+		border-radius: 0.7rem;
+		background: rgba(255, 255, 255, 0.02);
+		overflow: auto;
+	}
+
+	.config-output pre {
+		margin: 0;
+		padding: 0.8rem 0.9rem;
+		color: #d7dde4;
+		font-size: 0.73rem;
+		line-height: 1.45;
+		white-space: pre-wrap;
+		word-break: break-word;
+		font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
+	}
+
+	.config-output-state {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		padding: 0.8rem 0.9rem;
+		color: #9ea5ae;
+		font-size: 0.76rem;
 	}
 
 	.build-list {

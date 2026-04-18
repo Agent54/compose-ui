@@ -635,6 +635,32 @@ export async function loadBuilds(ui: UiState): Promise<ComposeBuild[]> {
 	return parseBuilds(payload).map(toBuild);
 }
 
+export async function loadProjectConfig(
+	ui: UiState,
+	projectId: string,
+	path: string,
+	format: 'yaml' | 'json' = 'yaml'
+) {
+	const params = new URLSearchParams();
+	params.set('path', path);
+	params.set('format', format);
+
+	const response = await fetch(
+		`${joinUrl(ui.serverUrl, ui.apiVersion, `/config/${projectId}`)}?${params.toString()}`,
+		{
+			headers: {
+				accept: format === 'json' ? 'application/json' : 'application/yaml, text/yaml, text/plain'
+			}
+		}
+	);
+
+	if (!response.ok) {
+		throw await responseError(`Loading /config for ${projectId}`, response);
+	}
+
+	return await response.text();
+}
+
 export async function loadProjectProcesses(
 	ui: UiState,
 	project: Pick<ComposeProject, 'id'>

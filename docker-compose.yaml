@@ -1,7 +1,7 @@
-name: dev # docker compose --project-name "$(basename "$PWD")" up
+name: compose # docker compose --project-name "$(basename "$PWD")" up
 
 services:
-  MYNAME:
+  ui:
     build: .
     environment:
       - NODE_ENV=development
