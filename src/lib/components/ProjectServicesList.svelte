@@ -9,6 +9,7 @@
 		project,
 		selectedContainerId,
 		busyAction,
+		refreshEpoch,
 		onContainerSelect,
 		onStartStop,
 		onOpenContextMenu,
@@ -18,6 +19,7 @@
 		project: ComposeProject;
 		selectedContainerId: string;
 		busyAction: string | null;
+		refreshEpoch: number;
 		onContainerSelect: (projectId: string, serviceId: string) => void;
 		onStartStop: (project: ComposeProject, service: ComposeService) => void;
 		onOpenContextMenu: (event: MouseEvent, project: ComposeProject, service: ComposeService) => void;
@@ -32,7 +34,7 @@
 				.where(({ services }) => eq(services.projectId, project.id))
 				.orderBy(({ services }) => services.serviceName)
 				.orderBy(({ services }) => services.containerName),
-		[() => project.id]
+		[() => project.id, () => refreshEpoch]
 	);
 
 	const services = $derived((servicesQuery.data ?? []) as ComposeService[]);

@@ -70,6 +70,8 @@
 		items: ContextMenuItem[];
 	};
 
+	let serviceQueryEpoch = $state(0);
+
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
 	const settingsQuery = useLiveQuery((q) => q.from({ settings: settingsCollection }));
@@ -82,8 +84,9 @@
 	const expandedProjectIdList = $derived((settings?.expandedProjectIds ?? []).slice().sort());
 	const expandedProjectIds = $derived(new Set(expandedProjectIdList));
 
-	const openProjectsQuery = useLiveQuery((q) => {
-		const targetIds = expandedProjectIdList.length ? expandedProjectIdList : ['__none__'];
+	const openProjectsQuery = useLiveQuery(
+		(q) => {
+			const targetIds = expandedProjectIdList.length ? expandedProjectIdList : ['__none__'];
 
 			return q
 				.from({ projects: projectsCollection })
@@ -96,7 +99,9 @@
 						.orderBy(({ services }) => services.serviceName)
 						.orderBy(({ services }) => services.containerName)
 				}));
-		});
+		},
+		[() => expandedProjectIdList.join('|'), () => serviceQueryEpoch]
+	);
 
 	const allLogs = $derived((allLogsQuery.data ?? []) as LogEntry[]);
 	const openProjectRows = $derived((openProjectsQuery.data ?? []) as OpenProjectRow[]);
@@ -180,7 +185,7 @@
 				.where(({ services }) => eq(services.projectId, selectedProjectId || '__none__'))
 				.orderBy(({ services }) => services.serviceName)
 				.orderBy(({ services }) => services.containerName),
-		[() => selectedProjectId]
+		[() => selectedProjectId, () => serviceQueryEpoch]
 	);
 
 	const selectedServices = $derived(
@@ -200,6 +205,8 @@
 	let topError = $state('');
 	let processSnapshots = $state<ComposeProcessSnapshot[]>([]);
 	let contextMenu = $state<ContextMenuState | null>(null);
+	const ACTION_SETTLE_ATTEMPTS = 8;
+	const ACTION_SETTLE_DELAY_MS = 350;
 
 	$effect(() => {
 		if (!visibleProjects.length) {
@@ -338,45 +345,22 @@
 	}
 
 	function isProjectFullyPaused(project: ComposeProject) {
-		const services = projectServices(project.id);
-
-		if (services.length) {
-			return services.every((service) => service.state === 'paused');
-		}
-
-		return project.state === 'paused' || project.statusLabel.toLowerCase().includes('paused');
+		return projectAggregateState(project) === 'paused';
 	}
 
 	function projectCanPause(project: ComposeProject) {
-		const services = projectServices(project.id);
-
-		if (services.length) {
-			return services.some((service) => service.state === 'running' || service.state === 'paused');
-		}
-
-		return project.state === 'running' || project.state === 'paused';
+		const aggregateState = projectAggregateState(project);
+		return aggregateState === 'running' || aggregateState === 'paused' || aggregateState === 'mixed';
 	}
 
 	function projectCanStart(project: ComposeProject) {
-		const services = projectServices(project.id);
-
-		if (services.length) {
-			return services.some((service) =>
-				['exited', 'created', 'uncreated', 'unknown'].includes(service.state)
-			);
-		}
-
-		return project.state !== 'running' && project.state !== 'paused';
+		const aggregateState = projectAggregateState(project);
+		return aggregateState !== 'running' && aggregateState !== 'paused';
 	}
 
 	function projectCanStop(project: ComposeProject) {
-		const services = projectServices(project.id);
-
-		if (services.length) {
-			return services.some((service) => service.state === 'running' || service.state === 'paused');
-		}
-
-		return project.state === 'running' || project.state === 'paused';
+		const aggregateState = projectAggregateState(project);
+		return aggregateState === 'running' || aggregateState === 'paused' || aggregateState === 'mixed';
 	}
 
 	function normalizeProjectStatusState(
@@ -574,6 +558,57 @@
 		return fallback;
 	}
 
+	function wait(ms: number) {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	function projectServiceSnapshot(projectId: string, serviceNames?: string[]) {
+		return [...servicesCollection.state.values()].filter((service) => {
+			if (service.projectId !== projectId) {
+				return false;
+			}
+
+			if (serviceNames?.length && !serviceNames.includes(service.serviceName)) {
+				return false;
+			}
+
+			return true;
+		}) as ComposeService[];
+	}
+
+	function serviceStateMatches(
+		service: ComposeService,
+		expected: 'running' | 'paused' | 'stopped'
+	) {
+		if (expected === 'stopped') {
+			return service.state !== 'running' && service.state !== 'paused';
+		}
+
+		return service.state === expected;
+	}
+
+	async function settleProjectServices(
+		projectId: string,
+		expected: 'running' | 'paused' | 'stopped',
+		serviceNames?: string[]
+	) {
+		for (let attempt = 0; attempt < ACTION_SETTLE_ATTEMPTS; attempt += 1) {
+			invalidateProjectServices(projectId);
+			await reloadProjectServices([projectId]);
+			serviceQueryEpoch += 1;
+
+			const services = projectServiceSnapshot(projectId, serviceNames);
+
+			if (services.length && services.every((service) => serviceStateMatches(service, expected))) {
+				return;
+			}
+
+			if (attempt < ACTION_SETTLE_ATTEMPTS - 1) {
+				await wait(ACTION_SETTLE_DELAY_MS);
+			}
+		}
+	}
+
 	async function refresh() {
 		if (!uiState) {
 			return;
@@ -605,10 +640,23 @@
 		}
 	}
 
-	async function syncAfterAction(project: ComposeProject, logMessage: string) {
+	async function syncAfterAction(
+		project: ComposeProject,
+		logMessage: string,
+		options?: {
+			serviceNames?: string[];
+			settleState?: 'running' | 'paused' | 'stopped';
+		}
+	) {
 		await refresh();
-		invalidateProjectServices(project.id);
-		await reloadProjectServices([project.id]);
+
+		if (options?.settleState) {
+			await settleProjectServices(project.id, options.settleState, options.serviceNames);
+		} else {
+			invalidateProjectServices(project.id);
+			await reloadProjectServices([project.id]);
+			serviceQueryEpoch += 1;
+		}
 
 		appendLog(project.id, 'ok', logMessage);
 	}
@@ -627,23 +675,36 @@
 		try {
 			if (shouldStop) {
 				await stopServices(uiState, project, serviceNames);
-				await syncAfterAction(project, `Stopped ${service?.serviceName ?? project.name}.`);
+				await syncAfterAction(project, `Stopped ${service?.serviceName ?? project.name}.`, {
+					serviceNames,
+					settleState: 'stopped'
+				});
 				setConnectionState('connected', `Stopped ${service?.serviceName ?? project.name}.`);
 			} else if (service && service.state === 'uncreated') {
 				await startProject(uiState, project.path, project.watching, serviceNames);
-				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up.`);
+				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up.`, {
+					serviceNames,
+					settleState: 'running'
+				});
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (service) {
 				await startServices(uiState, project, serviceNames);
-				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name}.`);
+				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name}.`, {
+					serviceNames,
+					settleState: 'running'
+				});
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (project.state === 'uncreated') {
 				await startProject(uiState, project.path, project.watching);
-				await syncAfterAction(project, `Started ${project.name} via /up.`);
+				await syncAfterAction(project, `Started ${project.name} via /up.`, {
+					settleState: 'running'
+				});
 				setConnectionState('connected', `Started ${project.name}.`);
 			} else {
 				await startServices(uiState, project);
-				await syncAfterAction(project, `Started services for ${project.name}.`);
+				await syncAfterAction(project, `Started services for ${project.name}.`, {
+					settleState: 'running'
+				});
 				setConnectionState('connected', `Started ${project.name}.`);
 			}
 		} catch (error) {
@@ -670,7 +731,11 @@
 			await startProject(uiState, project.path, project.watching, serviceNames, false);
 			await syncAfterAction(
 				project,
-				`Started ${service?.serviceName ?? project.name} without rebuilding.`
+				`Started ${service?.serviceName ?? project.name} without rebuilding.`,
+				{
+					serviceNames,
+					settleState: 'running'
+				}
 			);
 			setConnectionState(
 				'connected',
@@ -702,14 +767,22 @@
 				await unpauseServices(uiState, project, serviceNames);
 				await syncAfterAction(
 					project,
-					`Resumed ${service?.serviceName ?? project.name}.`
+					`Resumed ${service?.serviceName ?? project.name}.`,
+					{
+						serviceNames,
+						settleState: 'running'
+					}
 				);
 				setConnectionState('connected', `Resumed ${service?.serviceName ?? project.name}.`);
 			} else {
 				await pauseServices(uiState, project, serviceNames);
 				await syncAfterAction(
 					project,
-					`Paused ${service?.serviceName ?? project.name}.`
+					`Paused ${service?.serviceName ?? project.name}.`,
+					{
+						serviceNames,
+						settleState: 'paused'
+					}
 				);
 				setConnectionState('connected', `Paused ${service?.serviceName ?? project.name}.`);
 			}
@@ -1052,6 +1125,7 @@
 								{project}
 								{selectedContainerId}
 								{busyAction}
+								refreshEpoch={serviceQueryEpoch}
 								onContainerSelect={handleContainerSelect}
 								onStartStop={handleStartStopToggle}
 								onOpenContextMenu={openServiceContextMenu}
@@ -1070,15 +1144,15 @@
 	<main class="panel">
 		<header class="panel-header">
 			<div class="panel-heading">
-				<div class="status-line">
-					<span
-						class:connected={uiState?.status === 'connected'}
-						class:error-state={uiState?.status === 'error'}
-						class="status-dot"
-					></span>
-					<span class="status-copy">{uiState?.statusDetail}</span>
-				</div>
 				<h2>{selectedProject?.name ?? 'Compose Projects'}</h2>
+			</div>
+			<div class="status-line">
+				<span
+					class:connected={uiState?.status === 'connected'}
+					class:error-state={uiState?.status === 'error'}
+					class="status-dot"
+				></span>
+				<span class="status-copy">{uiState?.statusDetail}</span>
 			</div>
 		</header>
 
