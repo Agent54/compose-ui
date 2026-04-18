@@ -21,6 +21,7 @@
 		pauseServices,
 		projectsCollection,
 		refreshProjectsFromServer,
+		reloadProjectServices,
 		selectContainer,
 		selectProject,
 		settingsCollection,
@@ -60,6 +61,7 @@
 	type ContextMenuItem = {
 		label: string;
 		action: () => void;
+		disabled?: boolean;
 	};
 
 	type ContextMenuState = {
@@ -391,44 +393,97 @@
 		return project.state === 'running' || project.state === 'paused';
 	}
 
-	function projectIconTone(project: ComposeProject) {
-		const services = projectServices(project.id);
+	function normalizeProjectStatusState(
+		value: string
+	): ComposeProject['state'] | ComposeService['state'] | 'mixed' {
+		const state = value.trim().toLowerCase();
 
-		if (services.length) {
-			const running = services.filter((service) => service.state === 'running').length;
-			const paused = services.filter((service) => service.state === 'paused').length;
-			const exited = services.filter((service) => service.state === 'exited').length;
-
-			if (running > 0 && paused === 0 && exited === 0) {
-				return 'project-icon-running';
-			}
-
-			if (paused > 0 && running === 0 && exited === 0) {
-				return 'project-icon-warning';
-			}
-
-			if (running > 0 || paused > 0) {
-				return 'project-icon-warning';
-			}
-
-			if (exited > 0) {
-				return 'project-icon-exited';
-			}
+		if (!state) {
+			return 'unknown';
 		}
 
-		if (project.state === 'running') {
+		if (state === 'running' || state === 'up') {
+			return 'running';
+		}
+
+		if (state === 'paused') {
+			return 'paused';
+		}
+
+		if (state === 'uncreated') {
+			return 'uncreated';
+		}
+
+		if (state === 'created') {
+			return 'created';
+		}
+
+		if (state === 'exited' || state === 'dead' || state === 'stopped' || state === 'stop') {
+			return 'exited';
+		}
+
+		return 'unknown';
+	}
+
+	function projectAggregateState(project: ComposeProject) {
+		const counts = new Map<string, number>();
+		const matches = [...project.statusLabel.toLowerCase().matchAll(/([a-z-]+)(?:\((\d+)\))?/g)];
+
+		for (const match of matches) {
+			const normalized = normalizeProjectStatusState(match[1] ?? '');
+
+			if (normalized === 'mixed') {
+				continue;
+			}
+
+			const amount = Number(match[2] ?? 1) || 1;
+			counts.set(normalized, (counts.get(normalized) ?? 0) + amount);
+		}
+
+		if (!counts.size) {
+			return normalizeProjectStatusState(project.state);
+		}
+
+		const nonZeroStates = [...counts.entries()].filter(([, amount]) => amount > 0).map(([state]) => state);
+
+		if (nonZeroStates.length === 1) {
+			return nonZeroStates[0] as ComposeProject['state'] | ComposeService['state'];
+		}
+
+		return 'mixed';
+	}
+
+	function projectRowStatusLabel(project: ComposeProject) {
+		const matches = [...project.statusLabel.matchAll(/([a-z-]+)(?:\((\d+)\))?/gi)];
+
+		if (matches.length !== 1) {
+			return project.statusLabel;
+		}
+
+		const label = matches[0]?.[1]?.trim();
+		return label || project.statusLabel;
+	}
+
+	function projectIconTone(project: ComposeProject) {
+		const aggregateState = projectAggregateState(project);
+
+		if (aggregateState === 'running') {
 			return 'project-icon-running';
 		}
 
-		if (project.state === 'uncreated') {
+		if (aggregateState === 'paused') {
+			return 'project-icon-paused';
+		}
+
+		if (aggregateState === 'uncreated') {
 			return 'project-icon-uncreated';
 		}
 
-		if (project.state === 'paused' || project.statusLabel.toLowerCase().includes('paused')) {
-			return 'project-icon-warning';
+		if (aggregateState === 'created' || aggregateState === 'unknown') {
+			return 'project-icon-neutral';
 		}
 
-		if (project.statusLabel.includes('running(') && project.statusLabel.includes('exited(')) {
+		if (aggregateState === 'mixed') {
 			return 'project-icon-warning';
 		}
 
@@ -508,6 +563,11 @@
 
 	async function syncAfterAction(project: ComposeProject, logMessage: string) {
 		await refresh();
+
+		if (expandedProjectIds.has(project.id)) {
+			await reloadProjectServices([project.id]);
+		}
+
 		appendLog(project.id, 'ok', logMessage);
 	}
 
@@ -676,17 +736,110 @@
 		contextMenu = null;
 	}
 
+	function canStartWithoutRebuild(project: ComposeProject, service?: ComposeService) {
+		if (service) {
+			return service.state === 'uncreated';
+		}
+
+		return project.state === 'uncreated';
+	}
+
+	function buildProjectContextMenuItems(project: ComposeProject): ContextMenuItem[] {
+		const canStart = projectCanStart(project);
+		const canStop = projectCanStop(project);
+		const canPause = projectCanPause(project);
+		const canUnpause = isProjectFullyPaused(project);
+
+		return [
+			{
+				label: 'Start',
+				action: () => void handleStartStopToggle(project),
+				disabled: !canStart
+			},
+			{
+				label: 'Stop',
+				action: () => void handleStartStopToggle(project),
+				disabled: !canStop
+			},
+			{
+				label: 'Pause',
+				action: () => void handlePauseToggle(project),
+				disabled: !canPause || canUnpause
+			},
+			{
+				label: 'Unpause',
+				action: () => void handlePauseToggle(project),
+				disabled: !canUnpause
+			},
+			{
+				label: 'Start watching',
+				action: () => void handleWatchingToggle(project),
+				disabled: project.watching
+			},
+			{
+				label: 'Stop watching',
+				action: () => void handleWatchingToggle(project),
+				disabled: !project.watching
+			},
+			{
+				label: 'Start without rebuilding',
+				action: () => void handleStartWithoutRebuild(project),
+				disabled: !canStartWithoutRebuild(project)
+			}
+		];
+	}
+
+	function buildServiceContextMenuItems(
+		project: ComposeProject,
+		service: ComposeService
+	): ContextMenuItem[] {
+		const canStart = ['exited', 'created', 'uncreated', 'unknown'].includes(service.state);
+		const canStop = service.state === 'running' || service.state === 'paused';
+		const canPause = service.state === 'running';
+		const canUnpause = service.state === 'paused';
+
+		return [
+			{
+				label: 'Start',
+				action: () => void handleStartStopToggle(project, service),
+				disabled: !canStart
+			},
+			{
+				label: 'Stop',
+				action: () => void handleStartStopToggle(project, service),
+				disabled: !canStop
+			},
+			{
+				label: 'Pause',
+				action: () => void handlePauseToggle(project, service),
+				disabled: !canPause
+			},
+			{
+				label: 'Unpause',
+				action: () => void handlePauseToggle(project, service),
+				disabled: !canUnpause
+			},
+			{
+				label: 'Start watching',
+				action: () => void handleWatchingToggle(project),
+				disabled: project.watching
+			},
+			{
+				label: 'Stop watching',
+				action: () => void handleWatchingToggle(project),
+				disabled: !project.watching
+			},
+			{
+				label: 'Start without rebuilding',
+				action: () => void handleStartWithoutRebuild(project, service),
+				disabled: !canStartWithoutRebuild(project, service)
+			}
+		];
+	}
+
 	function openProjectContextMenu(event: MouseEvent, project: ComposeProject) {
 		event.preventDefault();
-
-		const items: ContextMenuItem[] = [];
-
-		if (projectCanStart(project)) {
-			items.push({
-				label: 'Start without rebuilding',
-				action: () => void handleStartWithoutRebuild(project)
-			});
-		}
+		const items = buildProjectContextMenuItems(project);
 
 		contextMenu = items.length
 			? {
@@ -703,15 +856,7 @@
 		service: ComposeService
 	) {
 		event.preventDefault();
-
-		const items: ContextMenuItem[] = [];
-
-		if (['exited', 'created', 'uncreated', 'unknown'].includes(service.state)) {
-			items.push({
-				label: 'Start without rebuilding',
-				action: () => void handleStartWithoutRebuild(project, service)
-			});
-		}
+		const items = buildServiceContextMenuItems(project, service);
 
 		contextMenu = items.length
 			? {
@@ -802,7 +947,7 @@
 										<Icon name="container" size={14} class={projectIconTone(project)} />
 										{project.name}
 									</span>
-									<span class="project-status">{project.statusLabel}</span>
+									<span class="project-status">{projectRowStatusLabel(project)}</span>
 								</span>
 								<span class="project-meta">{project.containerCount > 0 ? project.containerCount : ''}</span>
 							</button>
@@ -1064,7 +1209,12 @@
 				<button
 					class="context-menu-item"
 					type="button"
+					disabled={item.disabled}
 					onmousedown={() => {
+						if (item.disabled) {
+							return;
+						}
+
 						closeContextMenu();
 						item.action();
 					}}
@@ -1288,9 +1438,9 @@
 	.project-copy {
 		display: flex;
 		min-width: 0;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.08rem;
+		align-items: center;
+		gap: 0.42rem;
+		white-space: nowrap;
 	}
 
 	.project-name {
@@ -1304,6 +1454,11 @@
 	}
 
 	.project-status {
+		flex: 1 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		line-height: 1;
 		font-size: 0.72rem;
 		color: #989ea6;
 	}
@@ -1316,8 +1471,16 @@
 		color: #70bc7b;
 	}
 
+	:global(.project-icon-paused) {
+		color: #7fc4ea;
+	}
+
 	:global(.project-icon-warning) {
 		color: #c7a45f;
+	}
+
+	:global(.project-icon-neutral) {
+		color: #9097a0;
 	}
 
 	:global(.project-icon-exited) {
@@ -1494,6 +1657,16 @@
 	.context-menu-item:hover {
 		background: rgba(255, 255, 255, 0.06);
 		color: #f1f4f7;
+	}
+
+	.context-menu-item:disabled {
+		cursor: default;
+		opacity: 0.42;
+	}
+
+	.context-menu-item:disabled:hover {
+		background: transparent;
+		color: #d9dde2;
 	}
 
 	.sidebar-empty,

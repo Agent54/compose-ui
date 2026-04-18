@@ -180,12 +180,12 @@ function parseServiceState(rawState: string, rawStatus: string): ComposeService[
 	const state = rawState.trim().toLowerCase();
 	const status = rawStatus.trim().toLowerCase();
 
-	if (state === 'running' || status.startsWith('up ')) {
-		return 'running';
-	}
-
 	if (state === 'paused' || status.includes('paused')) {
 		return 'paused';
+	}
+
+	if (state === 'running' || status.startsWith('up ')) {
+		return 'running';
 	}
 
 	if (state === 'exited' || state === 'dead' || status.startsWith('exited')) {

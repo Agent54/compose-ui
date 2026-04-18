@@ -50,6 +50,14 @@
 			return 'service-state-uncreated';
 		}
 
+		if (service.state === 'created') {
+			return 'service-state-created';
+		}
+
+		if (service.state === 'unknown') {
+			return 'service-state-unknown';
+		}
+
 		return 'service-state-exited';
 	}
 
@@ -66,6 +74,14 @@
 			return 'play';
 		}
 
+		if (service.state === 'created') {
+			return 'container';
+		}
+
+		if (service.state === 'unknown') {
+			return 'pulse';
+		}
+
 		return 'stop';
 	}
 </script>
@@ -78,6 +94,7 @@
 					class="service-button"
 					type="button"
 					aria-label={`Select ${service.serviceName}`}
+					title={service.containerName}
 					oncontextmenu={(event) => onOpenContextMenu(event, project, service)}
 					onmousedown={() => onContainerSelect(project.id, service.id)}
 				>
@@ -85,16 +102,13 @@
 						<Icon name={serviceStateIcon(service)} size={13} />
 					</span>
 					<div class="service-copy">
-						<div class="service-title">
-							<span>{service.serviceName}</span>
-							<span class="service-container">{service.containerName}</span>
-						</div>
-						<div class="service-subtitle">
+						<span class="service-title">{service.serviceName}</span>
+						<span class="service-status">
 							{service.stateText}
 							{#if service.health}
 								<span class="health-tag">({service.health})</span>
 							{/if}
-						</div>
+						</span>
 					</div>
 				</button>
 
@@ -140,7 +154,13 @@
 			</div>
 		{/each}
 	{:else if servicesQuery.isLoading || !servicesQuery.isReady}
-		<div class="service-empty">Loading containers…</div>
+		<div class="service-row service-row-loading" aria-hidden="true">
+			<div class="service-button service-button-loading">
+				<span class="service-state service-state-loading">
+					<Icon name="refresh" size={13} spinning={true} />
+				</span>
+			</div>
+		</div>
 	{:else}
 		<div class="service-empty">No containers returned by /ps.</div>
 	{/if}
@@ -156,7 +176,7 @@
 		position: relative;
 		display: flex;
 		gap: 0.58rem;
-		padding: 0.24rem 0;
+		padding: 0.28rem 0;
 		overflow: visible;
 		border-radius: 0.55rem;
 	}
@@ -176,9 +196,9 @@
 		display: flex;
 		width: 100%;
 		min-width: 0;
-		align-items: flex-start;
+		align-items: center;
 		gap: 0.58rem;
-		padding: 0.02rem 3.9rem 0.02rem 0;
+		padding: 0.08rem 3.9rem 0.08rem 0;
 		border: 0;
 		background: transparent;
 		color: inherit;
@@ -188,7 +208,8 @@
 
 	.service-state {
 		display: inline-flex;
-		padding-top: 0.16rem;
+		align-items: center;
+		justify-content: center;
 		color: #c66c6b;
 	}
 
@@ -197,7 +218,7 @@
 	}
 
 	.service-state-paused {
-		color: #c7a45f;
+		color: #7fc4ea;
 	}
 
 	.service-state-exited {
@@ -208,24 +229,35 @@
 		color: #7b8087;
 	}
 
+	.service-state-created {
+		color: #97a2ad;
+	}
+
+	.service-state-unknown {
+		color: #a8afb8;
+	}
+
 	.service-copy {
+		display: flex;
 		min-width: 0;
+		align-items: baseline;
+		gap: 0.42rem;
 		font-size: 0.8rem;
+		white-space: nowrap;
 	}
 
 	.service-title {
-		display: flex;
-		gap: 0.35rem;
 		font-weight: 600;
 		color: #eef0f2;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
-	.service-container {
-		color: #a4aab2;
-		font-weight: 500;
-	}
-
-	.service-subtitle {
+	.service-status {
+		flex: 1 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
 		color: #969ca5;
 	}
 
@@ -285,5 +317,18 @@
 		background: rgba(255, 255, 255, 0.015);
 		font-size: 0.74rem;
 		color: #9aa1aa;
+	}
+
+	.service-row-loading {
+		padding-right: 0.5rem;
+	}
+
+	.service-button-loading {
+		padding-right: 0;
+		cursor: default;
+	}
+
+	.service-state-loading {
+		color: #8f969f;
 	}
 </style>
