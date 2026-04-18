@@ -57,6 +57,17 @@
 		argString: string;
 	};
 
+	type ContextMenuItem = {
+		label: string;
+		action: () => void;
+	};
+
+	type ContextMenuState = {
+		x: number;
+		y: number;
+		items: ContextMenuItem[];
+	};
+
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
 	const settingsQuery = useLiveQuery((q) => q.from({ settings: settingsCollection }));
@@ -200,6 +211,7 @@
 	let topLoading = $state(false);
 	let topError = $state('');
 	let processSnapshots = $state<ComposeProcessSnapshot[]>([]);
+	let contextMenu = $state<ContextMenuState | null>(null);
 
 	$effect(() => {
 		if (!visibleProjects.length) {
@@ -515,6 +527,10 @@
 				await stopServices(uiState, project, serviceNames);
 				await syncAfterAction(project, `Stopped ${service?.serviceName ?? project.name}.`);
 				setConnectionState('connected', `Stopped ${service?.serviceName ?? project.name}.`);
+			} else if (service && service.state === 'uncreated') {
+				await startProject(uiState, project.path, project.watching, serviceNames);
+				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up.`);
+				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (service) {
 				await startServices(uiState, project, serviceNames);
 				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name}.`);
@@ -532,6 +548,36 @@
 			const message = errorMessage(
 				error,
 				`Failed to ${shouldStop ? 'stop' : 'start'} ${service?.serviceName ?? project.name}.`
+			);
+			setConnectionState('error', message);
+			appendLog(project.id, 'error', message);
+		} finally {
+			busyAction = null;
+		}
+	}
+
+	async function handleStartWithoutRebuild(project = selectedProject, service?: ComposeService) {
+		if (!project || !uiState || busyAction) {
+			return;
+		}
+
+		const serviceNames = service ? [service.serviceName] : undefined;
+		busyAction = `up-no-build:${project.id}:${service?.id ?? 'project'}`;
+
+		try {
+			await startProject(uiState, project.path, project.watching, serviceNames, false);
+			await syncAfterAction(
+				project,
+				`Started ${service?.serviceName ?? project.name} without rebuilding.`
+			);
+			setConnectionState(
+				'connected',
+				`Started ${service?.serviceName ?? project.name} without rebuilding.`
+			);
+		} catch (error) {
+			const message = errorMessage(
+				error,
+				`Failed to start ${service?.serviceName ?? project.name} without rebuilding.`
 			);
 			setConnectionState('error', message);
 			appendLog(project.id, 'error', message);
@@ -612,15 +658,68 @@
 	}
 
 	function handleProjectSelect(projectId: string) {
+		contextMenu = null;
 		selectProject(projectId);
 	}
 
 	function handleContainerSelect(projectId: string, serviceId: string) {
+		contextMenu = null;
 		selectContainer(projectId, serviceId);
 	}
 
 	function toggleProject(projectId: string) {
+		contextMenu = null;
 		setProjectExpanded(projectId, !expandedProjectIds.has(projectId));
+	}
+
+	function closeContextMenu() {
+		contextMenu = null;
+	}
+
+	function openProjectContextMenu(event: MouseEvent, project: ComposeProject) {
+		event.preventDefault();
+
+		const items: ContextMenuItem[] = [];
+
+		if (projectCanStart(project)) {
+			items.push({
+				label: 'Start without rebuilding',
+				action: () => void handleStartWithoutRebuild(project)
+			});
+		}
+
+		contextMenu = items.length
+			? {
+					x: event.clientX,
+					y: event.clientY,
+					items
+				}
+			: null;
+	}
+
+	function openServiceContextMenu(
+		event: MouseEvent,
+		project: ComposeProject,
+		service: ComposeService
+	) {
+		event.preventDefault();
+
+		const items: ContextMenuItem[] = [];
+
+		if (['exited', 'created', 'uncreated', 'unknown'].includes(service.state)) {
+			items.push({
+				label: 'Start without rebuilding',
+				action: () => void handleStartWithoutRebuild(project, service)
+			});
+		}
+
+		contextMenu = items.length
+			? {
+					x: event.clientX,
+					y: event.clientY,
+					items
+				}
+			: null;
 	}
 </script>
 
@@ -667,6 +766,7 @@
 				class="refresh-button"
 				type="button"
 				aria-label="Refresh projects"
+				title="Refresh projects"
 				onmousedown={refresh}
 				disabled={refreshing || busyAction !== null}
 			>
@@ -682,7 +782,9 @@
 							class:selected={selectedProject?.id === project.id && !selectedContainerId}
 							class="project-row"
 							role="treeitem"
+							tabindex="-1"
 							aria-selected={selectedProject?.id === project.id}
+							oncontextmenu={(event) => openProjectContextMenu(event, project)}
 						>
 							<button
 								class="toggle"
@@ -711,6 +813,7 @@
 										class="overlay-button"
 										type="button"
 										aria-label={`${projectCanStop(project) ? 'Stop' : 'Start'} ${project.name}`}
+										title={`${projectCanStop(project) ? 'Stop' : 'Start'} ${project.name}`}
 										onmousedown={() => handleStartStopToggle(project)}
 										disabled={busyAction !== null}
 									>
@@ -723,6 +826,7 @@
 										class="overlay-button"
 										type="button"
 										aria-label={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
+										title={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
 										onmousedown={() => handlePauseToggle(project)}
 										disabled={busyAction !== null}
 									>
@@ -734,6 +838,7 @@
 									class="overlay-button"
 									type="button"
 									aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${project.name}`}
+									title={`${project.watching ? 'Stop watching' : 'Watch'} ${project.name}`}
 									onmousedown={() => handleWatchingToggle(project)}
 									disabled={busyAction !== null}
 								>
@@ -749,6 +854,7 @@
 								{busyAction}
 								onContainerSelect={handleContainerSelect}
 								onStartStop={handleStartStopToggle}
+								onOpenContextMenu={openServiceContextMenu}
 								onPauseToggle={handlePauseToggle}
 								onWatchingToggle={handleWatchingToggle}
 							/>
@@ -943,6 +1049,31 @@
 			</section>
 		</div>
 	</main>
+
+	{#if contextMenu}
+		<button
+			class="context-menu-backdrop"
+			type="button"
+			aria-label="Close context menu"
+			onmousedown={closeContextMenu}
+			oncontextmenu={closeContextMenu}
+		></button>
+
+		<div class="context-menu" style={`left:${contextMenu.x}px;top:${contextMenu.y}px;`}>
+			{#each contextMenu.items as item}
+				<button
+					class="context-menu-item"
+					type="button"
+					onmousedown={() => {
+						closeContextMenu();
+						item.action();
+					}}
+				>
+					{item.label}
+				</button>
+			{/each}
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -951,6 +1082,7 @@
 	}
 
 	.workspace {
+		position: relative;
 		display: grid;
 		height: 100vh;
 		min-height: 0;
@@ -1324,6 +1456,44 @@
 	.overlay-button:disabled {
 		cursor: default;
 		opacity: 0.55;
+	}
+
+	.context-menu-backdrop {
+		position: absolute;
+		inset: 0;
+		z-index: 20;
+		background: transparent;
+		border: 0;
+		cursor: default;
+	}
+
+	.context-menu {
+		position: absolute;
+		z-index: 21;
+		display: flex;
+		min-width: 12.5rem;
+		flex-direction: column;
+		padding: 0.28rem;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 0.7rem;
+		background: rgba(11, 11, 12, 0.98);
+		box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+	}
+
+	.context-menu-item {
+		padding: 0.42rem 0.58rem;
+		border: 0;
+		border-radius: 0.48rem;
+		background: transparent;
+		color: #d9dde2;
+		font-size: 0.78rem;
+		text-align: left;
+		cursor: pointer;
+	}
+
+	.context-menu-item:hover {
+		background: rgba(255, 255, 255, 0.06);
+		color: #f1f4f7;
 	}
 
 	.sidebar-empty,

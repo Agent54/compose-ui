@@ -11,6 +11,7 @@
 		busyAction,
 		onContainerSelect,
 		onStartStop,
+		onOpenContextMenu,
 		onPauseToggle,
 		onWatchingToggle
 	}: {
@@ -19,6 +20,7 @@
 		busyAction: string | null;
 		onContainerSelect: (projectId: string, serviceId: string) => void;
 		onStartStop: (project: ComposeProject, service: ComposeService) => void;
+		onOpenContextMenu: (event: MouseEvent, project: ComposeProject, service: ComposeService) => void;
 		onPauseToggle: (project: ComposeProject, service: ComposeService) => void;
 		onWatchingToggle: (project: ComposeProject) => void;
 	} = $props();
@@ -76,6 +78,7 @@
 					class="service-button"
 					type="button"
 					aria-label={`Select ${service.serviceName}`}
+					oncontextmenu={(event) => onOpenContextMenu(event, project, service)}
 					onmousedown={() => onContainerSelect(project.id, service.id)}
 				>
 					<span class={`service-state ${serviceStateTone(service)}`}>
@@ -100,6 +103,7 @@
 						class="overlay-button"
 						type="button"
 						aria-label={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
+						title={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
 						onmousedown={() => onStartStop(project, service)}
 						disabled={busyAction !== null}
 					>
@@ -114,6 +118,7 @@
 							class="overlay-button"
 							type="button"
 							aria-label={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
+							title={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
 							onmousedown={() => onPauseToggle(project, service)}
 							disabled={busyAction !== null}
 						>
@@ -125,6 +130,7 @@
 						class="overlay-button"
 						type="button"
 						aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
+						title={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
 						onmousedown={() => onWatchingToggle(project)}
 						disabled={busyAction !== null}
 					>

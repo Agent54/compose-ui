@@ -66,6 +66,11 @@ export const apiSchema: ApiSchema = {
 					name: 'watch',
 					type: 'boolean',
 					description: 'Start watch mode after up succeeds'
+				},
+				{
+					name: 'services',
+					type: 'string[]',
+					description: 'Optional service names'
 				}
 			]
 		},

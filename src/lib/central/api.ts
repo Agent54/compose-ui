@@ -378,13 +378,24 @@ export async function checkHealth(ui: UiState) {
 	}
 }
 
-export async function startProject(ui: UiState, path: string, watching: boolean) {
+export async function startProject(
+	ui: UiState,
+	path: string,
+	watching: boolean,
+	services?: string[],
+	build = true
+) {
 	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/up'), {
 		method: 'POST',
 		headers: {
 			'content-type': 'application/json'
 		},
-		body: JSON.stringify({ path, build: false, watch: watching })
+		body: JSON.stringify({
+			path,
+			build,
+			watch: watching,
+			...(services?.length ? { services } : {})
+		})
 	});
 
 	if (!response.ok) {
