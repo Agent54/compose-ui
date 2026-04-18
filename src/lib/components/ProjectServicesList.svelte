@@ -98,7 +98,7 @@
 	}
 
 	function isPrimaryMouse(event: MouseEvent) {
-		return event.button === 0;
+		return event.button === 0 && !event.ctrlKey;
 	}
 </script>
 
