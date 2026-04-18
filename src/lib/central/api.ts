@@ -114,28 +114,62 @@ async function responseError(action: string, response: Response): Promise<Error>
 	return new Error(detail ? `${baseMessage}: ${detail}` : baseMessage);
 }
 
+function normalizeListedState(rawState: string, rawStatus: string) {
+	const state = rawState.trim().toLowerCase();
+	const status = rawStatus.trim().toLowerCase();
+
+	if (state === 'paused' || status.includes('paused')) {
+		return 'paused' as const;
+	}
+
+	if (state === 'running' || status === 'up' || status.startsWith('up ')) {
+		return 'running' as const;
+	}
+
+	if (state === 'exited' || state === 'dead' || status.startsWith('exited')) {
+		return 'exited' as const;
+	}
+
+	if (state === 'stopped' || state === 'stop' || status === 'stopped' || status.startsWith('stopped')) {
+		return 'stopped' as const;
+	}
+
+	if (state === 'created') {
+		return 'created' as const;
+	}
+
+	if (state === 'uncreated' || status === 'uncreated') {
+		return 'uncreated' as const;
+	}
+
+	return 'unknown' as const;
+}
+
 function toProject(raw: ListedProject, index: number): ComposeProject {
 	const name = raw.Name ?? raw.name ?? raw.project ?? raw.ID ?? raw.id ?? `project-${index + 1}`;
 	const sourceId = raw.ID ?? raw.id ?? name;
 	const id = String(sourceId).trim() || `project-${index + 1}`;
 	const rawStatus = String(raw.Status ?? raw.status ?? raw.state ?? '').trim();
-	const stateValue = rawStatus.toLowerCase();
 	const statusMatch = /^([a-z-]+)(?:\((\d+)\))?$/i.exec(rawStatus);
-	const statusName = statusMatch?.[1]?.toLowerCase() ?? stateValue;
+	const statusName = statusMatch?.[1] ?? '';
 	const containerCount = Number(statusMatch?.[2] ?? 0);
-	const isRunning =
-		raw.running === true ||
-		raw.active === true ||
-		statusName === 'running' ||
-		stateValue === 'up';
-	const isExited = statusName === 'exited';
-	const isUncreated = statusName === 'uncreated';
+	const normalizedState =
+		raw.running === true || raw.active === true
+			? 'running'
+			: normalizeListedState(String(raw.state ?? statusName), rawStatus);
 
 	return {
 		id,
 		name,
 		path: raw.ConfigFiles ?? raw.path ?? raw.dir ?? raw.directory ?? `./${name}`,
-		state: isRunning ? 'running' : isExited ? 'exited' : isUncreated ? 'uncreated' : 'stopped',
+		state:
+			normalizedState === 'running' ||
+			normalizedState === 'paused' ||
+			normalizedState === 'exited' ||
+			normalizedState === 'uncreated' ||
+			normalizedState === 'stopped'
+				? normalizedState
+				: 'stopped',
 		statusLabel: rawStatus || 'unknown',
 		containerCount,
 		watching: raw.watch === true || raw.watchActive === true || raw.watch_active === true,
@@ -177,30 +211,8 @@ function firstNonEmptyString(...values: unknown[]) {
 }
 
 function parseServiceState(rawState: string, rawStatus: string): ComposeService['state'] {
-	const state = rawState.trim().toLowerCase();
-	const status = rawStatus.trim().toLowerCase();
-
-	if (state === 'paused' || status.includes('paused')) {
-		return 'paused';
-	}
-
-	if (state === 'running' || status.startsWith('up ')) {
-		return 'running';
-	}
-
-	if (state === 'exited' || state === 'dead' || status.startsWith('exited')) {
-		return 'exited';
-	}
-
-	if (state === 'created') {
-		return 'created';
-	}
-
-	if (state === 'uncreated' || status === 'uncreated') {
-		return 'uncreated';
-	}
-
-	return 'unknown';
+	const normalized = normalizeListedState(rawState, rawStatus);
+	return normalized === 'stopped' ? 'exited' : normalized;
 }
 
 function parseHealth(raw: ListedContainer): ComposeService['health'] {

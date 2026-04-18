@@ -101,13 +101,14 @@
 	const allLogs = $derived((allLogsQuery.data ?? []) as LogEntry[]);
 	const openProjectRows = $derived((openProjectsQuery.data ?? []) as OpenProjectRow[]);
 
-	function stateRank(state: ComposeProject['state']) {
+	function stateRank(state: ComposeProject['state'] | ComposeService['state'] | 'mixed') {
 		if (state === 'running') return 0;
 		if (state === 'paused') return 1;
-		if (state === 'exited') return 2;
-		if (state === 'stopped') return 3;
-		if (state === 'uncreated') return 4;
-		return 5;
+		if (state === 'mixed') return 2;
+		if (state === 'exited' || state === 'stopped') return 3;
+		if (state === 'created' || state === 'unknown') return 4;
+		if (state === 'uncreated') return 5;
+		return 6;
 	}
 
 	function compareProjects(
@@ -123,8 +124,11 @@
 			return left.name.localeCompare(right.name) || left.path.localeCompare(right.path);
 		}
 
+		const leftState = projectAggregateState(left);
+		const rightState = projectAggregateState(right);
+
 		return (
-			stateRank(left.state) - stateRank(right.state) ||
+			stateRank(leftState) - stateRank(rightState) ||
 			right.containerCount - left.containerCount ||
 			left.name.localeCompare(right.name)
 		);
@@ -603,10 +607,8 @@
 
 	async function syncAfterAction(project: ComposeProject, logMessage: string) {
 		await refresh();
-
-		if (expandedProjectIds.has(project.id)) {
-			await reloadProjectServices([project.id]);
-		}
+		invalidateProjectServices(project.id);
+		await reloadProjectServices([project.id]);
 
 		appendLog(project.id, 'ok', logMessage);
 	}
