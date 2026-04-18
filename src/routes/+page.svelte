@@ -874,6 +874,10 @@
 		selectContainer(projectId, serviceId);
 	}
 
+	function isPrimaryMouse(event: MouseEvent) {
+		return event.button === 0;
+	}
+
 	function toggleProject(projectId: string) {
 		contextMenu = null;
 		setProjectExpanded(projectId, !expandedProjectIds.has(projectId));
@@ -1098,12 +1102,22 @@
 								type="button"
 								aria-label={expandedProjectIds.has(project.id) ? `Collapse ${project.name}` : `Expand ${project.name}`}
 								aria-pressed={expandedProjectIds.has(project.id)}
-								onmousedown={() => toggleProject(project.id)}
+								onmousedown={(event) => {
+									if (!isPrimaryMouse(event)) return;
+									toggleProject(project.id);
+								}}
 							>
 								<Icon name="chevron" size={13} rotated={expandedProjectIds.has(project.id)} />
 							</button>
 
-							<button class="project-button" type="button" onmousedown={() => handleProjectSelect(project.id)}>
+							<button
+								class="project-button"
+								type="button"
+								onmousedown={(event) => {
+									if (!isPrimaryMouse(event)) return;
+									handleProjectSelect(project.id);
+								}}
+							>
 								<span class="project-copy">
 									<span class="project-name">
 										<Icon name="container" size={14} class={projectIconTone(project)} />
@@ -1134,7 +1148,10 @@
 											class="overlay-button"
 											type="button"
 											aria-label={`${projectCanStop(project) ? 'Stop' : 'Start'} ${project.name}`}
-											onmousedown={() => handleStartStopToggle(project)}
+											onmousedown={(event) => {
+												if (!isPrimaryMouse(event)) return;
+												handleStartStopToggle(project);
+											}}
 											disabled={busyAction !== null}
 										>
 											<Icon name={projectCanStop(project) ? 'stop' : 'play'} size={13} />
@@ -1151,7 +1168,10 @@
 											class="overlay-button"
 											type="button"
 											aria-label={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
-											onmousedown={() => handlePauseToggle(project)}
+											onmousedown={(event) => {
+												if (!isPrimaryMouse(event)) return;
+												handlePauseToggle(project);
+											}}
 											disabled={busyAction !== null}
 										>
 											<Icon name={isProjectFullyPaused(project) ? 'play' : 'pause'} size={13} />
@@ -1167,7 +1187,10 @@
 										class="overlay-button"
 										type="button"
 										aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${project.name}`}
-										onmousedown={() => handleWatchingToggle(project)}
+										onmousedown={(event) => {
+											if (!isPrimaryMouse(event)) return;
+											handleWatchingToggle(project);
+										}}
 										disabled={busyAction !== null}
 									>
 										<Icon name={project.watching ? 'eye-off' : 'eye'} size={13} />

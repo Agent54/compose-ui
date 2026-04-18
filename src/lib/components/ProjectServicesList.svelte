@@ -96,6 +96,10 @@
 			? `${service.containerName}\n${service.stateText} (${service.health})`
 			: `${service.containerName}\n${service.stateText}`;
 	}
+
+	function isPrimaryMouse(event: MouseEvent) {
+		return event.button === 0;
+	}
 </script>
 
 <div class="service-list">
@@ -107,7 +111,10 @@
 					type="button"
 					aria-label={`Select ${service.serviceName}`}
 					oncontextmenu={(event) => onOpenContextMenu(event, project, service)}
-					onmousedown={() => onContainerSelect(project.id, service.id)}
+					onmousedown={(event) => {
+						if (!isPrimaryMouse(event)) return;
+						onContainerSelect(project.id, service.id);
+					}}
 				>
 					<span class={`service-state ${serviceStateTone(service)}`}>
 						<Icon name={serviceStateIcon(service)} size={13} />
@@ -135,7 +142,10 @@
 							class="overlay-button"
 							type="button"
 							aria-label={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
-							onmousedown={() => onStartStop(project, service)}
+							onmousedown={(event) => {
+								if (!isPrimaryMouse(event)) return;
+								onStartStop(project, service);
+							}}
 							disabled={busyAction !== null}
 						>
 							<Icon
@@ -154,7 +164,10 @@
 								class="overlay-button"
 								type="button"
 								aria-label={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
-								onmousedown={() => onPauseToggle(project, service)}
+								onmousedown={(event) => {
+									if (!isPrimaryMouse(event)) return;
+									onPauseToggle(project, service);
+								}}
 								disabled={busyAction !== null}
 							>
 								<Icon name={service.state === 'paused' ? 'play' : 'pause'} size={13} />
@@ -170,7 +183,10 @@
 							class="overlay-button"
 							type="button"
 							aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
-							onmousedown={() => onWatchingToggle(project)}
+							onmousedown={(event) => {
+								if (!isPrimaryMouse(event)) return;
+								onWatchingToggle(project);
+							}}
 							disabled={busyAction !== null}
 						>
 							<Icon name={project.watching ? 'eye-off' : 'eye'} size={13} />
