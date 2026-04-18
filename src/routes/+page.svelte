@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { eq, inArray } from '@tanstack/db';
 	import { useLiveQuery } from '@tanstack/svelte-db';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	import Icon from '$lib/components/Icon.svelte';
 	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
@@ -71,6 +71,8 @@
 	};
 
 	let serviceQueryEpoch = $state(0);
+	let searchExpanded = $state(false);
+	let searchInput: HTMLInputElement | null = null;
 
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
@@ -81,6 +83,8 @@
 	const selectedProjectId = $derived(uiState?.selectedProjectId ?? '');
 	const selectedContainerId = $derived(uiState?.selectedContainerId ?? '');
 	const autoRefreshPaused = $derived(uiState?.autoRefreshPaused ?? false);
+	const hasFilter = $derived((uiState?.filter ?? '').trim().length > 0);
+	const searchOpen = $derived(searchExpanded || hasFilter);
 	const settings = $derived((settingsQuery.data?.[0] as LocalSettings | undefined) ?? undefined);
 	const expandedProjectIdList = $derived((settings?.expandedProjectIds ?? []).slice().sort());
 	const expandedProjectIds = $derived(new Set(expandedProjectIdList));
@@ -246,6 +250,25 @@
 
 	function handleManualRefresh() {
 		void refresh({ silent: true });
+	}
+
+	async function openSearch(event?: MouseEvent) {
+		if (searchOpen) {
+			event?.preventDefault();
+			searchInput?.focus();
+			return;
+		}
+
+		event?.preventDefault();
+		searchExpanded = true;
+		await tick();
+		searchInput?.focus();
+	}
+
+	function collapseSearch() {
+		if (!hasFilter) {
+			searchExpanded = false;
+		}
 	}
 
 	function statusLineText() {
@@ -1032,18 +1055,6 @@
 <div class="workspace">
 	<aside class="sidebar">
 		<div class="sidebar-controls">
-			<label class="search">
-				<Icon name="search" size={13} />
-				<input
-					type="text"
-					value={uiState?.filter ?? ''}
-					oninput={(event) =>
-						updateUiState({ filter: (event.currentTarget as HTMLInputElement).value })}
-					placeholder="Filter projects"
-					aria-label="Filter projects"
-				/>
-			</label>
-
 			<label class="sort-menu">
 				<Icon name="sort" size={13} />
 				<select
@@ -1054,11 +1065,37 @@
 						})}
 					aria-label="Sort projects"
 				>
-					<option value="status">Status</option>
-					<option value="name">Project Name</option>
-					<option value="path">Compose Path</option>
+					<option value="status">by status</option>
+					<option value="name">by project name</option>
+					<option value="path">by compose path</option>
 				</select>
 			</label>
+
+			<div class:collapsed={!searchOpen} class="search">
+				<button
+					class="search-trigger"
+					type="button"
+					aria-label={searchOpen ? 'Focus project filter' : 'Open project filter'}
+					onmousedown={(event) => void openSearch(event)}
+				>
+					<Icon name="search" size={13} />
+				</button>
+				<input
+					bind:this={searchInput}
+					type="text"
+					value={uiState?.filter ?? ''}
+					oninput={(event) =>
+						updateUiState({ filter: (event.currentTarget as HTMLInputElement).value })}
+					onblur={collapseSearch}
+					onkeydown={(event) => {
+						if (event.key === 'Escape' && !hasFilter) {
+							searchInput?.blur();
+						}
+					}}
+					placeholder="Filter projects"
+					aria-label="Filter projects"
+				/>
+			</div>
 
 			<span class="tooltip-anchor" data-tooltip="Refresh projects">
 				<button
@@ -1440,6 +1477,7 @@
 	}
 
 	.refresh-button,
+	.search-trigger,
 	.sort-menu select,
 	.toggle,
 	.project-button,
@@ -1471,7 +1509,7 @@
 
 	.sidebar-controls {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto auto;
+		grid-template-columns: auto minmax(0, 1fr) auto;
 		gap: 0.5rem;
 		padding: 0.8rem 0.75rem 0.6rem;
 		align-items: center;
@@ -1494,16 +1532,39 @@
 	.search {
 		display: flex;
 		align-items: center;
+		justify-self: end;
 		gap: 0.5rem;
 		height: 1.95rem;
 		border: 1px solid rgba(255, 255, 255, 0.08);
 		border-radius: 0.6rem;
 		background: rgba(255, 255, 255, 0.03);
+		width: 100%;
+		max-width: 100%;
 		padding: 0 0.58rem;
 		color: #93989e;
+		overflow: hidden;
+		cursor: text;
+		transition:
+			width 180ms ease,
+			gap 180ms ease,
+			padding 180ms ease,
+			border-color 180ms ease,
+			background-color 180ms ease,
+			color 180ms ease;
+	}
+
+	.search.collapsed {
+		justify-content: center;
+		width: 1.65rem;
+		gap: 0;
+		padding: 0;
+		border-color: transparent;
+		background: transparent;
+		cursor: pointer;
 	}
 
 	.search input {
+		flex: 1 1 auto;
 		width: 100%;
 		height: 100%;
 		min-height: 0;
@@ -1514,27 +1575,53 @@
 		line-height: 1;
 		outline: none;
 		font-size: 0.82rem;
+		opacity: 1;
+		transition:
+			width 180ms ease,
+			opacity 120ms ease;
+	}
+
+	.search.collapsed input {
+		width: 0;
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	.search-trigger {
+		display: grid;
+		height: 1.65rem;
+		width: 1.65rem;
+		flex: 0 0 1.65rem;
+		place-items: center;
+		padding: 0;
+		color: inherit;
 	}
 
 	.sort-menu {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.42rem;
-		color: #93989e;
+		color: #878c91;
 	}
 
 	.sort-menu select {
 		min-width: 7.25rem;
 		height: 1.95rem;
-		border: 1px solid rgba(255, 255, 255, 0.08);
+		border: 1px solid transparent;
 		border-radius: 0.6rem;
-		background: rgba(255, 255, 255, 0.03);
-		padding: 0 1.85rem 0 0.72rem;
+		background: transparent;
+		padding: 0 1.3rem 0 0;
+		appearance: none;
 		font-size: 0.77rem;
 		font-weight: 600;
 		line-height: 1;
-		color: #e4e7ea;
+		color: #a4a8ad;
 		outline: none;
+	}
+
+	.sort-menu select:hover,
+	.sort-menu select:focus {
+		color: #d0d4d8;
 	}
 
 	.tree {
@@ -2268,7 +2355,7 @@
 
 	@media (max-width: 640px) {
 		.sidebar-controls {
-			grid-template-columns: minmax(0, 1fr) auto auto;
+			grid-template-columns: auto minmax(0, 1fr) auto;
 			gap: 0.42rem;
 		}
 
