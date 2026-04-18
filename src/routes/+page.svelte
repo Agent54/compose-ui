@@ -190,24 +190,6 @@
 	const selectedLogs = $derived(
 		selectedProject ? allLogs.filter((entry) => entry.projectId === selectedProject.id).slice().reverse() : []
 	);
-	const runningServices = $derived(
-		selectedServices.length
-			? selectedServices.filter((service) => service.state === 'running').length
-			: selectedProject?.state === 'running'
-				? selectedProject.containerCount
-				: 0
-	);
-	const pausedServices = $derived(
-		selectedServices.filter((service) => service.state === 'paused').length
-	);
-	const exitedServices = $derived(
-		selectedServices.length
-			? selectedServices.filter((service) => service.state === 'exited').length
-			: selectedProject?.state === 'exited'
-				? selectedProject.containerCount
-				: 0
-	);
-
 	let refreshing = $state(false);
 	let busyAction = $state<string | null>(null);
 	let topLoading = $state(false);
@@ -490,6 +472,40 @@
 		return 'project-icon-exited';
 	}
 
+	function projectStateChipClass(project: ComposeProject | undefined) {
+		if (!project) {
+			return '';
+		}
+
+		const aggregateState = projectAggregateState(project);
+
+		if (aggregateState === 'running') {
+			return 'state-chip-running';
+		}
+
+		if (aggregateState === 'paused') {
+			return 'state-chip-paused';
+		}
+
+		if (aggregateState === 'uncreated') {
+			return 'state-chip-uncreated';
+		}
+
+		if (aggregateState === 'created') {
+			return 'state-chip-created';
+		}
+
+		if (aggregateState === 'unknown') {
+			return 'state-chip-unknown';
+		}
+
+		if (aggregateState === 'mixed') {
+			return 'state-chip-mixed';
+		}
+
+		return 'state-chip-exited';
+	}
+
 	function serviceStateTone(service: ComposeService) {
 		if (service.state === 'running') {
 			return 'service-state-running';
@@ -520,6 +536,30 @@
 		}
 
 		return 'stop';
+	}
+
+	function serviceStateChipClass(service: ComposeService) {
+		if (service.state === 'running') {
+			return 'state-chip-running';
+		}
+
+		if (service.state === 'paused') {
+			return 'state-chip-paused';
+		}
+
+		if (service.state === 'uncreated') {
+			return 'state-chip-uncreated';
+		}
+
+		if (service.state === 'created') {
+			return 'state-chip-created';
+		}
+
+		if (service.state === 'unknown') {
+			return 'state-chip-unknown';
+		}
+
+		return 'state-chip-exited';
 	}
 
 	function errorMessage(error: unknown, fallback: string) {
@@ -907,16 +947,17 @@
 				</select>
 			</label>
 
-			<button
-				class="refresh-button"
-				type="button"
-				aria-label="Refresh projects"
-				title="Refresh projects"
-				onmousedown={refresh}
-				disabled={refreshing || busyAction !== null}
-			>
-				<Icon name="refresh" size={13} spinning={refreshing} />
-			</button>
+			<span class="tooltip-anchor" data-tooltip="Refresh projects">
+				<button
+					class="refresh-button"
+					type="button"
+					aria-label="Refresh projects"
+					onmousedown={refresh}
+					disabled={refreshing || busyAction !== null}
+				>
+					<Icon name="refresh" size={13} spinning={refreshing} />
+				</button>
+			</span>
 		</div>
 
 		<div class="tree" role="tree" aria-label="Compose projects">
@@ -954,41 +995,53 @@
 
 							<div class="row-actions">
 								{#if projectCanStart(project) || projectCanStop(project)}
-									<button
-										class="overlay-button"
-										type="button"
-										aria-label={`${projectCanStop(project) ? 'Stop' : 'Start'} ${project.name}`}
-										title={`${projectCanStop(project) ? 'Stop' : 'Start'} ${project.name}`}
-										onmousedown={() => handleStartStopToggle(project)}
-										disabled={busyAction !== null}
+									<span
+										class="tooltip-anchor"
+										data-tooltip={`${projectCanStop(project) ? 'Stop' : 'Start'} ${project.name}`}
 									>
-										<Icon name={projectCanStop(project) ? 'stop' : 'play'} size={13} />
-									</button>
+										<button
+											class="overlay-button"
+											type="button"
+											aria-label={`${projectCanStop(project) ? 'Stop' : 'Start'} ${project.name}`}
+											onmousedown={() => handleStartStopToggle(project)}
+											disabled={busyAction !== null}
+										>
+											<Icon name={projectCanStop(project) ? 'stop' : 'play'} size={13} />
+										</button>
+									</span>
 								{/if}
 
 								{#if projectCanPause(project)}
+									<span
+										class="tooltip-anchor"
+										data-tooltip={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
+									>
+										<button
+											class="overlay-button"
+											type="button"
+											aria-label={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
+											onmousedown={() => handlePauseToggle(project)}
+											disabled={busyAction !== null}
+										>
+											<Icon name={isProjectFullyPaused(project) ? 'play' : 'pause'} size={13} />
+										</button>
+									</span>
+								{/if}
+
+								<span
+									class="tooltip-anchor"
+									data-tooltip={`${project.watching ? 'Stop watching' : 'Watch'} ${project.name}`}
+								>
 									<button
 										class="overlay-button"
 										type="button"
-										aria-label={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
-										title={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
-										onmousedown={() => handlePauseToggle(project)}
+										aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${project.name}`}
+										onmousedown={() => handleWatchingToggle(project)}
 										disabled={busyAction !== null}
 									>
-										<Icon name={isProjectFullyPaused(project) ? 'play' : 'pause'} size={13} />
+										<Icon name="eye" size={13} />
 									</button>
-								{/if}
-
-								<button
-									class="overlay-button"
-									type="button"
-									aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${project.name}`}
-									title={`${project.watching ? 'Stop watching' : 'Watch'} ${project.name}`}
-									onmousedown={() => handleWatchingToggle(project)}
-									disabled={busyAction !== null}
-								>
-									<Icon name="eye" size={13} />
-								</button>
+								</span>
 							</div>
 						</div>
 
@@ -1035,34 +1088,12 @@
 						<h3>{selectedProject?.path ?? 'http://127.0.0.1:8094'}</h3>
 					</div>
 					<div class="pill-row">
-						<span
-							class:active-pill={selectedProject?.state === 'running' || (selectedProject ? isProjectFullyPaused(selectedProject) : false)}
-							class="pill"
-						>
+						<span class={`pill ${projectStateChipClass(selectedProject)}`}>
 							{selectedProject?.statusLabel ?? 'Unknown'}
 						</span>
 						<span class:active-pill={selectedProject?.watching} class="pill">
 							{selectedProject?.watching ? 'Watching' : 'Not Watching'}
 						</span>
-					</div>
-				</div>
-
-				<div class="metrics">
-					<div class="metric">
-						<span class="metric-label">Running</span>
-						<strong>{runningServices}</strong>
-					</div>
-					<div class="metric">
-						<span class="metric-label">Paused</span>
-						<strong>{pausedServices}</strong>
-					</div>
-					<div class="metric">
-						<span class="metric-label">Exited</span>
-						<strong>{exitedServices}</strong>
-					</div>
-					<div class="metric">
-						<span class="metric-label">Watching</span>
-						<strong>{selectedProject?.watching ? 'On' : 'Off'}</strong>
 					</div>
 				</div>
 
@@ -1075,11 +1106,7 @@
 									<div class="row-subtitle">{service.containerName}</div>
 								</div>
 								<div class="row-tail">
-									<span
-										class:ok-state={service.state === 'running'}
-										class:warn-state={service.state === 'paused'}
-										class="state-chip"
-									>
+									<span class={`state-chip ${serviceStateChipClass(service)}`}>
 										{service.state}
 									</span>
 									<span>{service.stateText}</span>
@@ -1097,16 +1124,8 @@
 			</section>
 
 			<section class="card process-card">
-				<div class="card-header">
-					<div>
-						<p class="eyebrow">Processes</p>
-						<h3>
-							{selectedContainer
-								? selectedContainer.containerName
-								: selectedProject?.name ?? 'No project selected'}
-						</h3>
-					</div>
-					<div class="log-hint">`/top` output</div>
+				<div class="card-header card-header-compact">
+					<p class="eyebrow">Processes</p>
 				</div>
 
 				{#if topLoading}
@@ -1118,9 +1137,8 @@
 						{#each visibleProcessSnapshots as entry (entry.id)}
 							<div class="process-group">
 								<div class="process-heading">
-									<div>
+									<div class="tooltip-anchor" data-tooltip={entry.containerName}>
 										<div class="row-title">{entry.serviceName}</div>
-										<div class="row-subtitle">{entry.containerName}</div>
 									</div>
 									{#if entry.replica}
 										<span class="process-replica">#{entry.replica}</span>
@@ -1131,6 +1149,23 @@
 									{#each entry.processes as process, index (`${entry.id}-${index}`)}
 										{@const command = processCommand(entry, process)}
 										<div class="process-item">
+											{#if command}
+												<div class="command-card">
+													<div class="command-line">
+														<span class="command-name">{command.commandName}</span>
+														{#if command.argString}
+															<span class="command-inline-args">{command.argString}</span>
+														{/if}
+													</div>
+
+													{#if command.commandPath}
+														<div class="command-path" data-tooltip={command.commandPath}>
+															{command.commandPath}
+														</div>
+													{/if}
+												</div>
+											{/if}
+
 											<div class="process-meta">
 												{#each processFields(entry, process) as field}
 													<div class="process-meta-item">
@@ -1139,21 +1174,6 @@
 													</div>
 												{/each}
 											</div>
-
-											{#if command}
-												<div class="command-card">
-													{#if command.commandPath}
-														<div class="command-path">{command.commandPath}</div>
-													{/if}
-
-													<div class="command-line">
-														<span class="command-name">{command.commandName}</span>
-														{#if command.argString}
-															<span class="command-inline-args">{command.argString}</span>
-														{/if}
-													</div>
-												</div>
-											{/if}
 										</div>
 									{/each}
 								</div>
@@ -1170,12 +1190,8 @@
 			</section>
 
 			<section class="card log-card">
-				<div class="card-header">
-					<div>
-						<p class="eyebrow">Activity</p>
-						<h3>{selectedProject?.name ?? 'No project selected'}</h3>
-					</div>
-					<div class="log-hint">Recent project activity</div>
+				<div class="card-header card-header-compact">
+					<p class="eyebrow">Project activity</p>
 				</div>
 
 				{#if selectedLogs.length}
@@ -1621,6 +1637,38 @@
 		opacity: 0.55;
 	}
 
+	.tooltip-anchor,
+	[data-tooltip]:not([data-tooltip='']) {
+		position: relative;
+	}
+
+	.tooltip-anchor {
+		display: inline-flex;
+	}
+
+	.tooltip-anchor[data-tooltip]:hover::after,
+	[data-tooltip]:not([data-tooltip='']):hover::after {
+		content: attr(data-tooltip);
+		position: absolute;
+		left: 50%;
+		bottom: calc(100% + 0.42rem);
+		transform: translateX(-50%);
+		max-width: min(28rem, 70vw);
+		padding: 0.36rem 0.52rem;
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		border-radius: 0.45rem;
+		background: rgba(8, 8, 9, 0.98);
+		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+		color: #eef1f4;
+		font-size: 0.72rem;
+		line-height: 1.2;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		pointer-events: none;
+		z-index: 30;
+	}
+
 	.context-menu-backdrop {
 		position: absolute;
 		inset: 0;
@@ -1741,12 +1789,14 @@
 		flex: 1;
 		min-height: 0;
 		grid-template-columns: 1fr;
+		grid-auto-rows: min-content;
 		grid-template-areas:
 			'summary'
 			'processes'
 			'logs';
+		align-content: start;
 		gap: 0.9rem;
-		padding-top: 0.95rem;
+		margin-top: 0.95rem;
 	}
 
 	.card {
@@ -1760,6 +1810,11 @@
 			#0b0b0c;
 		padding: 0.95rem 1rem;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+	}
+
+	.summary-card .card-header,
+	.card-header-compact {
+		margin-bottom: 0.9rem;
 	}
 
 	.summary-card {
@@ -1792,33 +1847,6 @@
 	.warn-state {
 		color: #f1ddbb;
 		background: rgba(164, 126, 67, 0.18);
-	}
-
-	.metrics {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 0.7rem;
-		margin: 0.95rem 0 1rem;
-	}
-
-	.metric {
-		border-radius: 0.8rem;
-		background: rgba(255, 255, 255, 0.02);
-		padding: 0.75rem;
-	}
-
-	.metric-label,
-	.log-hint {
-		font-size: 0.75rem;
-		color: #9aa1aa;
-	}
-
-	.metric strong {
-		display: block;
-		margin-top: 0.2rem;
-		font-size: 1.1rem;
-		font-weight: 700;
-		color: #edf0f3;
 	}
 
 	.compact-list,
@@ -1859,6 +1887,41 @@
 		text-transform: uppercase;
 		background: rgba(126, 74, 74, 0.22);
 		color: #ffc0bf;
+	}
+
+	.state-chip-running {
+		color: #d4f0da;
+		background: rgba(61, 136, 88, 0.18);
+	}
+
+	.state-chip-paused {
+		color: #d6edfa;
+		background: rgba(76, 127, 161, 0.2);
+	}
+
+	.state-chip-uncreated {
+		color: #c1c7ce;
+		background: rgba(102, 107, 114, 0.22);
+	}
+
+	.state-chip-created {
+		color: #d5dbe2;
+		background: rgba(112, 120, 129, 0.22);
+	}
+
+	.state-chip-unknown {
+		color: #d5dbe2;
+		background: rgba(112, 120, 129, 0.22);
+	}
+
+	.state-chip-mixed {
+		color: #f1ddbb;
+		background: rgba(164, 126, 67, 0.18);
+	}
+
+	.state-chip-exited {
+		color: #ffc0bf;
+		background: rgba(126, 74, 74, 0.22);
 	}
 
 	.log-row {
@@ -1964,9 +2027,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.12rem;
-		border-radius: 0.5rem;
-		background: rgba(255, 255, 255, 0.04);
-		padding: 0.45rem 0.5rem;
+		min-width: 0;
 	}
 
 	.process-meta-label {
@@ -1985,19 +2046,23 @@
 	}
 
 	.command-card {
-		display: flex;
-		flex-direction: column;
-		gap: 0.55rem;
-		border-radius: 0.6rem;
-		background: rgba(255, 255, 255, 0.03);
-		padding: 0.65rem 0.7rem;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: start;
+		column-gap: 0.8rem;
+		row-gap: 0.35rem;
 	}
 
 	.command-path {
 		font-size: 0.68rem;
 		color: #9199a2;
 		font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
-		word-break: break-all;
+		justify-self: end;
+		max-width: 20rem;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		text-align: right;
 	}
 
 	.command-line {
@@ -2005,6 +2070,7 @@
 		flex-wrap: wrap;
 		align-items: baseline;
 		gap: 0.45rem;
+		min-width: 0;
 	}
 
 	.command-inline-args {

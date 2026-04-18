@@ -94,7 +94,7 @@
 					class="service-button"
 					type="button"
 					aria-label={`Select ${service.serviceName}`}
-					title={service.containerName}
+					data-tooltip={service.containerName}
 					oncontextmenu={(event) => onOpenContextMenu(event, project, service)}
 					onmousedown={() => onContainerSelect(project.id, service.id)}
 				>
@@ -113,43 +113,55 @@
 				</button>
 
 				<div class="row-actions">
-					<button
-						class="overlay-button"
-						type="button"
-						aria-label={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
-						title={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
-						onmousedown={() => onStartStop(project, service)}
-						disabled={busyAction !== null}
+					<span
+						class="tooltip-anchor"
+						data-tooltip={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
 					>
-						<Icon
-							name={service.state === 'running' || service.state === 'paused' ? 'stop' : 'play'}
-							size={13}
-						/>
-					</button>
-
-					{#if service.state === 'running' || service.state === 'paused'}
 						<button
 							class="overlay-button"
 							type="button"
-							aria-label={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
-							title={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
-							onmousedown={() => onPauseToggle(project, service)}
+							aria-label={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
+							onmousedown={() => onStartStop(project, service)}
 							disabled={busyAction !== null}
 						>
-							<Icon name={service.state === 'paused' ? 'play' : 'pause'} size={13} />
+							<Icon
+								name={service.state === 'running' || service.state === 'paused' ? 'stop' : 'play'}
+								size={13}
+							/>
 						</button>
+					</span>
+
+					{#if service.state === 'running' || service.state === 'paused'}
+						<span
+							class="tooltip-anchor"
+							data-tooltip={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
+						>
+							<button
+								class="overlay-button"
+								type="button"
+								aria-label={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
+								onmousedown={() => onPauseToggle(project, service)}
+								disabled={busyAction !== null}
+							>
+								<Icon name={service.state === 'paused' ? 'play' : 'pause'} size={13} />
+							</button>
+						</span>
 					{/if}
 
-					<button
-						class="overlay-button"
-						type="button"
-						aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
-						title={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
-						onmousedown={() => onWatchingToggle(project)}
-						disabled={busyAction !== null}
+					<span
+						class="tooltip-anchor"
+						data-tooltip={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
 					>
-						<Icon name="eye" size={13} />
-					</button>
+						<button
+							class="overlay-button"
+							type="button"
+							aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
+							onmousedown={() => onWatchingToggle(project)}
+							disabled={busyAction !== null}
+						>
+							<Icon name="eye" size={13} />
+						</button>
+					</span>
 				</div>
 			</div>
 		{/each}
@@ -306,6 +318,38 @@
 	.overlay-button:disabled {
 		cursor: default;
 		opacity: 0.55;
+	}
+
+	.tooltip-anchor,
+	[data-tooltip]:not([data-tooltip='']) {
+		position: relative;
+	}
+
+	.tooltip-anchor {
+		display: inline-flex;
+	}
+
+	.tooltip-anchor[data-tooltip]:hover::after,
+	[data-tooltip]:not([data-tooltip='']):hover::after {
+		content: attr(data-tooltip);
+		position: absolute;
+		left: 50%;
+		bottom: calc(100% + 0.42rem);
+		transform: translateX(-50%);
+		max-width: min(24rem, 70vw);
+		padding: 0.36rem 0.52rem;
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		border-radius: 0.45rem;
+		background: rgba(8, 8, 9, 0.98);
+		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+		color: #eef1f4;
+		font-size: 0.72rem;
+		line-height: 1.2;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		pointer-events: none;
+		z-index: 20;
 	}
 
 	.service-empty {
