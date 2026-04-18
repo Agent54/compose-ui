@@ -17,21 +17,28 @@ import type {
 } from './types';
 
 type RecordWithId = { id: string };
-type SyncWriteMessage<T extends RecordWithId> = { type: 'insert' | 'update' | 'delete'; value: T };
+type SyncWriteMessage<T extends RecordWithId> =
+	| { type: 'insert' | 'update'; value: T }
+	| { type: 'delete'; key: string; value?: T };
 
 type WritableCollection<T extends RecordWithId> = {
 	insert: (item: T) => void;
 	update: (key: string, updater: (draft: T) => void) => void;
+	state: {
+		has: (key: string) => boolean;
+	};
 };
 
 function upsert<T extends RecordWithId>(collection: WritableCollection<T>, item: T) {
-	try {
+	if (collection.state.has(item.id)) {
 		collection.update(item.id, (draft) => {
 			Object.assign(draft, item);
 		});
-	} catch {
-		collection.insert(item);
+
+		return;
 	}
+
+	collection.insert(item);
 }
 
 function stampTime() {
@@ -54,7 +61,9 @@ let serviceSyncWrite: ((message: SyncWriteMessage<ComposeService>) => void) | nu
 let serviceSyncCommit: (() => void) | null = null;
 let serviceLoadPromise: Promise<void> | null = null;
 let serviceLoadSignature = '';
+let serviceLoadQueue: Promise<void> = Promise.resolve();
 const loadedServicePaths = new Map<string, string>();
+const syncedServiceIdsByProject = new Map<string, Set<string>>();
 
 export const uiStateCollection = createCollection(
 	localOnlyCollectionOptions<UiState, string>({
@@ -96,23 +105,31 @@ function writeServiceSnapshots(snapshots: Array<{ projectId: string; services: C
 	serviceSyncBegin({ immediate: true });
 
 	for (const snapshot of snapshots) {
-		const currentProjectServices = currentServices().filter(
-			(service) => service.projectId === snapshot.projectId
-		);
+		const knownIds = new Set(syncedServiceIdsByProject.get(snapshot.projectId) ?? []);
+
+		for (const service of currentServices()) {
+			if (service.projectId === snapshot.projectId) {
+				knownIds.add(service.id);
+			}
+		}
+
 		const nextIds = new Set(snapshot.services.map((service) => service.id));
 
-		for (const current of currentProjectServices) {
-			if (!nextIds.has(current.id)) {
-				serviceSyncWrite({ type: 'delete', value: current });
-			}
+		for (const knownId of knownIds) {
+			serviceSyncWrite({
+				type: 'delete',
+				key: knownId
+			});
 		}
 
 		for (const service of snapshot.services) {
 			serviceSyncWrite({
-				type: servicesCollection.state.has(service.id) ? 'update' : 'insert',
+				type: 'insert',
 				value: service
 			});
 		}
+
+		syncedServiceIdsByProject.set(snapshot.projectId, nextIds);
 	}
 
 	serviceSyncCommit();
@@ -125,10 +142,27 @@ function clearServicesForProjects(projectIds: string[]) {
 
 	serviceSyncBegin({ immediate: true });
 
-	for (const service of currentServices()) {
-		if (projectIds.includes(service.projectId)) {
-			serviceSyncWrite({ type: 'delete', value: service });
+	for (const projectId of projectIds) {
+		const knownIds = new Set(syncedServiceIdsByProject.get(projectId) ?? []);
+
+		for (const service of currentServices()) {
+			if (service.projectId === projectId) {
+				knownIds.add(service.id);
+			}
 		}
+
+		if (!knownIds.size) {
+			continue;
+		}
+
+		for (const serviceId of knownIds) {
+			serviceSyncWrite({
+				type: 'delete',
+				key: serviceId
+			});
+		}
+
+		syncedServiceIdsByProject.delete(projectId);
 	}
 
 	serviceSyncCommit();
@@ -247,7 +281,7 @@ async function syncProjectServices(
 		.sort()
 		.join('|');
 
-	if (!force && serviceLoadPromise && serviceLoadSignature === signature) {
+	if (serviceLoadPromise && serviceLoadSignature === signature) {
 		return serviceLoadPromise;
 	}
 
@@ -259,12 +293,14 @@ async function syncProjectServices(
 		return;
 	}
 
-	const loadPromise = Promise.all(
-		projectsToLoad.map(async (project) => ({
-			projectId: project.id,
-			services: await loadProjectServices(ui, project)
-		}))
-	).then((snapshots) => {
+	const loadPromise = serviceLoadQueue.then(async () => {
+		const snapshots = await Promise.all(
+			projectsToLoad.map(async (project) => ({
+				projectId: project.id,
+				services: await loadProjectServices(ui, project)
+			}))
+		);
+
 		writeServiceSnapshots(snapshots);
 
 		for (const project of projectsToLoad) {
@@ -278,6 +314,10 @@ async function syncProjectServices(
 			serviceLoadSignature = '';
 		}
 	});
+	serviceLoadQueue = loadPromise.then(
+		() => undefined,
+		() => undefined
+	);
 	serviceLoadSignature = signature;
 
 	return serviceLoadPromise;
@@ -298,6 +338,9 @@ export const servicesCollection = createCollection({
 
 				for (const service of initialServices) {
 					write({ type: 'insert', value: service });
+					const projectIds = syncedServiceIdsByProject.get(service.projectId) ?? new Set<string>();
+					projectIds.add(service.id);
+					syncedServiceIdsByProject.set(service.projectId, projectIds);
 				}
 
 				commit();
@@ -327,7 +370,7 @@ export function selectContainer(projectId: string, containerId: string) {
 }
 
 export function setProjectExpanded(projectId: string, expanded: boolean) {
-	try {
+	if (settingsCollection.state.has('localstorage')) {
 		settingsCollection.update('localstorage', (draft: LocalSettings) => {
 			const expandedIds = new Set(draft.expandedProjectIds);
 
@@ -339,7 +382,7 @@ export function setProjectExpanded(projectId: string, expanded: boolean) {
 
 			draft.expandedProjectIds = [...expandedIds];
 		});
-	} catch {
+	} else {
 		settingsCollection.insert({
 			id: 'localstorage',
 			expandedProjectIds: expanded ? [projectId] : []
@@ -370,7 +413,8 @@ export function setConnectionState(status: ConnectionStatus, statusDetail: strin
 }
 
 export function hydrateProjects(projects: ComposeProject[], services: ComposeService[]) {
-	const nextProjectIds = new Set(projects.map((project) => project.id));
+	const uniqueProjects = [...new Map(projects.map((project) => [project.id, project])).values()];
+	const nextProjectIds = new Set(uniqueProjects.map((project) => project.id));
 	const removedProjectIds = currentProjects()
 		.map((project) => project.id)
 		.filter((projectId) => !nextProjectIds.has(projectId));
@@ -380,7 +424,7 @@ export function hydrateProjects(projects: ComposeProject[], services: ComposeSer
 		loadedServicePaths.delete(projectId);
 	}
 
-	for (const project of projects) {
+	for (const project of uniqueProjects) {
 		upsert(projectsCollection, project);
 	}
 

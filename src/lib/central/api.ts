@@ -502,7 +502,13 @@ export async function loadProjectServices(
 	}
 
 	const payload = (await response.json()) as unknown;
-	return parseServices(payload).map((service, index) => toService(service, project as ComposeProject, index));
+	return [
+		...new Map(
+			parseServices(payload)
+				.map((service, index) => toService(service, project as ComposeProject, index))
+				.map((service) => [service.id, service] as const)
+		).values()
+	];
 }
 
 export async function loadProjectProcesses(

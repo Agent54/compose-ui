@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { eq, inArray } from '@tanstack/db';
+	import { eq } from '@tanstack/db';
 	import { useLiveQuery } from '@tanstack/svelte-db';
 	import { onMount, tick } from 'svelte';
 
@@ -38,13 +38,6 @@
 		unpauseServices,
 		updateUiState
 	} from '$lib/central';
-
-	type OpenProjectRow = {
-		project: ComposeProject;
-		services: {
-			values: () => IterableIterator<ComposeService>;
-		};
-	};
 
 	type ProcessField = {
 		label: string;
@@ -89,27 +82,7 @@
 	const expandedProjectIdList = $derived((settings?.expandedProjectIds ?? []).slice().sort());
 	const expandedProjectIds = $derived(new Set(expandedProjectIdList));
 
-	const openProjectsQuery = useLiveQuery(
-		(q) => {
-			const targetIds = expandedProjectIdList.length ? expandedProjectIdList : ['__none__'];
-
-			return q
-				.from({ projects: projectsCollection })
-				.where(({ projects }) => inArray(projects.id, targetIds))
-				.select(({ projects }) => ({
-					project: projects,
-					services: q
-						.from({ services: servicesCollection })
-						.where(({ services }) => eq(services.projectId, projects.id))
-						.orderBy(({ services }) => services.serviceName)
-						.orderBy(({ services }) => services.containerName)
-				}));
-		},
-		[() => expandedProjectIdList.join('|'), () => serviceQueryEpoch]
-	);
-
 	const allLogs = $derived((allLogsQuery.data ?? []) as LogEntry[]);
-	const openProjectRows = $derived((openProjectsQuery.data ?? []) as OpenProjectRow[]);
 
 	function stateRank(state: ComposeProject['state'] | ComposeService['state'] | 'mixed') {
 		if (state === 'running') return 0;
@@ -147,24 +120,6 @@
 	const projects = $derived.by((): ComposeProject[] => {
 		const entries = [...((projectsQuery.data ?? []) as ComposeProject[])];
 		return entries.sort((left, right) => compareProjects(left, right, uiState?.sortBy ?? 'status'));
-	});
-
-	const servicesByProject = $derived.by(() => {
-		const grouped = new Map<string, ComposeService[]>();
-
-		for (const row of openProjectRows) {
-			const services = [...row.services.values()];
-			grouped.set(
-				row.project.id,
-				services.sort(
-					(left, right) =>
-						left.serviceName.localeCompare(right.serviceName) ||
-						left.containerName.localeCompare(right.containerName)
-				)
-			);
-		}
-
-		return grouped;
 	});
 
 	const visibleProjects = $derived.by(() => {
@@ -335,10 +290,6 @@
 			cancelled = true;
 		};
 	});
-
-	function projectServices(projectId: string) {
-		return servicesByProject.get(projectId) ?? [];
-	}
 
 	const visibleProcessSnapshots = $derived(
 		selectedContainerId
