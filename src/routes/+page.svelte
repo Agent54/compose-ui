@@ -244,6 +244,10 @@
 		updateUiState({ autoRefreshPaused: !autoRefreshPaused });
 	}
 
+	function handleManualRefresh() {
+		void refresh({ silent: true });
+	}
+
 	function statusLineText() {
 		const base = uiState?.statusDetail ?? 'Status unavailable.';
 		return `${base} ${autoRefreshPaused ? 'Polling paused.' : 'Polling every 5s.'}`;
@@ -1061,7 +1065,7 @@
 					class="refresh-button"
 					type="button"
 					aria-label="Refresh projects"
-					onmousedown={() => refresh()}
+					onmousedown={handleManualRefresh}
 					disabled={refreshing || busyAction !== null}
 				>
 					<Icon name="refresh" size={13} spinning={refreshing} />
@@ -1791,8 +1795,14 @@
 	}
 
 	.status-line[data-tooltip]:hover::after {
+		left: auto;
+		right: 0;
 		top: calc(100% + 0.42rem);
 		bottom: auto;
+		transform: none;
+		max-width: min(28rem, calc(100vw - 2rem));
+		white-space: normal;
+		text-align: left;
 	}
 
 	.context-menu-backdrop {
