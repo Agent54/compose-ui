@@ -1111,7 +1111,7 @@
 							</button>
 
 							<button
-								class="project-button"
+								class="project-button row-tooltip-trigger"
 								type="button"
 								onmousedown={(event) => {
 									if (!isPrimaryMouse(event)) return;
@@ -1920,7 +1920,7 @@
 	[data-tooltip]:not([data-tooltip='']):hover::after {
 		opacity: 1;
 		visibility: visible;
-		transition-delay: 320ms, 320ms, 320ms;
+		transition-delay: 650ms, 650ms, 650ms;
 	}
 
 	.tooltip-anchor[data-tooltip]:hover::after {
@@ -1966,11 +1966,11 @@
 			visibility 0s linear 320ms;
 	}
 
-	.project-row:hover .row-tooltip-bubble {
+	.row-tooltip-trigger:hover + .row-tooltip-bubble {
 		opacity: 1;
 		visibility: visible;
 		transform: translateY(0);
-		transition-delay: 320ms, 320ms, 320ms;
+		transition-delay: 650ms, 650ms, 650ms;
 	}
 
 	.project-row:has(.row-actions:hover) .row-tooltip-bubble {
@@ -2124,6 +2124,7 @@
 		display: grid;
 		flex: 1;
 		min-height: 0;
+		min-width: 0;
 		grid-template-columns: 1fr;
 		grid-auto-rows: min-content;
 		grid-template-areas:
@@ -2133,6 +2134,8 @@
 		align-content: start;
 		gap: 0.9rem;
 		margin-top: 0.95rem;
+		overflow: auto;
+		padding-right: 0.1rem;
 	}
 
 	.card {

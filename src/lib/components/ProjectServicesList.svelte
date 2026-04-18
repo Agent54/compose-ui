@@ -107,7 +107,7 @@
 		{#each services as service (service.id)}
 			<div class:selected={selectedContainerId === service.id} class="service-row">
 				<button
-					class="service-button"
+					class="service-button row-tooltip-trigger"
 					type="button"
 					aria-label={`Select ${service.serviceName}`}
 					oncontextmenu={(event) => onOpenContextMenu(event, project, service)}
@@ -400,7 +400,7 @@
 	[data-tooltip]:not([data-tooltip='']):hover::after {
 		opacity: 1;
 		visibility: visible;
-		transition-delay: 320ms, 320ms, 0s;
+		transition-delay: 650ms, 650ms, 650ms;
 	}
 
 	.tooltip-anchor[data-tooltip]:hover::after {
@@ -446,11 +446,11 @@
 			visibility 0s linear 140ms;
 	}
 
-	.service-row:hover .row-tooltip-bubble {
+	.row-tooltip-trigger:hover + .row-tooltip-bubble {
 		opacity: 1;
 		visibility: visible;
 		transform: translateY(0);
-		transition-delay: 320ms, 320ms, 320ms;
+		transition-delay: 650ms, 650ms, 650ms;
 	}
 
 	.service-row:has(.row-actions:hover) .row-tooltip-bubble {
