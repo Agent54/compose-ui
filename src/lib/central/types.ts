@@ -80,6 +80,7 @@ export type UiState = {
 	apiVersion: string;
 	filter: string;
 	sortBy: 'path' | 'name' | 'status';
+	autoRefreshPaused: boolean;
 	selectedProjectId: string;
 	selectedContainerId: string;
 	status: ConnectionStatus;

@@ -80,6 +80,7 @@
 	const uiState = $derived((uiQuery.data?.[0] as UiState | undefined) ?? undefined);
 	const selectedProjectId = $derived(uiState?.selectedProjectId ?? '');
 	const selectedContainerId = $derived(uiState?.selectedContainerId ?? '');
+	const autoRefreshPaused = $derived(uiState?.autoRefreshPaused ?? false);
 	const settings = $derived((settingsQuery.data?.[0] as LocalSettings | undefined) ?? undefined);
 	const expandedProjectIdList = $derived((settings?.expandedProjectIds ?? []).slice().sort());
 	const expandedProjectIds = $derived(new Set(expandedProjectIdList));
@@ -207,6 +208,7 @@
 	let contextMenu = $state<ContextMenuState | null>(null);
 	const ACTION_SETTLE_ATTEMPTS = 8;
 	const ACTION_SETTLE_DELAY_MS = 350;
+	const LS_POLL_INTERVAL_MS = 5000;
 
 	$effect(() => {
 		if (!visibleProjects.length) {
@@ -238,14 +240,42 @@
 		}
 	});
 
+	function toggleAutoRefresh() {
+		updateUiState({ autoRefreshPaused: !autoRefreshPaused });
+	}
+
+	function statusLineText() {
+		const base = uiState?.statusDetail ?? 'Status unavailable.';
+		return `${base} ${autoRefreshPaused ? 'Polling paused.' : 'Polling every 5s.'}`;
+	}
+
+	function statusTooltipText() {
+		return `${statusLineText()} ${autoRefreshPaused ? 'Click to resume polling.' : 'Click to pause polling.'}`;
+	}
+
 	onMount(() => {
 		void refresh();
+
+		const intervalId = window.setInterval(() => {
+			const currentUi = uiStateCollection.state.get('app');
+
+			if (!currentUi || currentUi.autoRefreshPaused || refreshing || busyAction) {
+				return;
+			}
+
+			void refresh({ silent: true });
+		}, LS_POLL_INTERVAL_MS);
+
+		return () => {
+			window.clearInterval(intervalId);
+		};
 	});
 
 	$effect(() => {
-		const project = selectedProject;
+		const projectId = selectedProjectId;
+		const ui = uiState;
 
-		if (!project || !uiState) {
+		if (!projectId || !ui) {
 			processSnapshots = [];
 			topError = '';
 			topLoading = false;
@@ -256,7 +286,7 @@
 		topLoading = true;
 		topError = '';
 
-		void loadProjectProcesses(uiState, project)
+		void loadProjectProcesses(ui, { id: projectId })
 			.then((entries) => {
 				if (!cancelled) {
 					processSnapshots = entries;
@@ -609,13 +639,15 @@
 		}
 	}
 
-	async function refresh() {
+	async function refresh(options?: { silent?: boolean }) {
 		if (!uiState) {
 			return;
 		}
 
 		refreshing = true;
-		setConnectionState('connecting', 'Connecting to Compose API at http://127.0.0.1:8094.');
+		if (!options?.silent) {
+			setConnectionState('connecting', 'Connecting to http://127.0.0.1:8094.');
+		}
 
 		try {
 			await checkHealth(uiState);
@@ -623,17 +655,19 @@
 			hydrateProjects(result.projects, result.services);
 			invalidateProjectServices();
 
-			setConnectionState('connected', 'Compose API reachable and synchronized.');
+			if (!options?.silent || uiState.status !== 'connected') {
+				setConnectionState('connected', 'Connected and synchronized.');
+			}
 
-			if (selectedProjectId) {
-				appendLog(selectedProjectId, 'ok', 'Refreshed project list from the Compose API.');
+			if (!options?.silent && selectedProjectId) {
+				appendLog(selectedProjectId, 'ok', 'Refreshed project list.');
 			}
 		} catch (error) {
 			const message = errorMessage(error, 'Server unavailable');
-			setConnectionState('error', `Compose API unavailable at http://127.0.0.1:8094. ${message}`);
+			setConnectionState('error', `Unavailable at http://127.0.0.1:8094. ${message}`);
 
-			if (selectedProjectId) {
-				appendLog(selectedProjectId, 'error', `Compose API unavailable. ${message}`);
+			if (!options?.silent && selectedProjectId) {
+				appendLog(selectedProjectId, 'error', `Unavailable. ${message}`);
 			}
 		} finally {
 			refreshing = false;
@@ -1027,7 +1061,7 @@
 					class="refresh-button"
 					type="button"
 					aria-label="Refresh projects"
-					onmousedown={refresh}
+					onmousedown={() => refresh()}
 					disabled={refreshing || busyAction !== null}
 				>
 					<Icon name="refresh" size={13} spinning={refreshing} />
@@ -1146,14 +1180,25 @@
 			<div class="panel-heading">
 				<h2>{selectedProject?.name ?? 'Compose Projects'}</h2>
 			</div>
-			<div class="status-line">
+			<button
+				class="status-line"
+				type="button"
+				aria-pressed={autoRefreshPaused}
+				aria-label={autoRefreshPaused ? 'Resume Compose polling' : 'Pause Compose polling'}
+				data-tooltip={statusTooltipText()}
+				onmousedown={toggleAutoRefresh}
+			>
 				<span
+					class:paused-status={autoRefreshPaused}
 					class:connected={uiState?.status === 'connected'}
 					class:error-state={uiState?.status === 'error'}
 					class="status-dot"
-				></span>
-				<span class="status-copy">{uiState?.statusDetail}</span>
-			</div>
+				>
+					{#if autoRefreshPaused}
+						<Icon name="pause" size={10} stroke={2.4} />
+					{/if}
+				</span>
+			</button>
 		</header>
 
 		<div class="content-grid">
@@ -1745,6 +1790,11 @@
 		z-index: 30;
 	}
 
+	.status-line[data-tooltip]:hover::after {
+		top: calc(100% + 0.42rem);
+		bottom: auto;
+	}
+
 	.context-menu-backdrop {
 		position: absolute;
 		inset: 0;
@@ -1838,26 +1888,40 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.5rem;
+		padding: 0;
+		border: 0;
+		background: transparent;
 		font-size: 0.8rem;
 		color: #9aa1aa;
+		cursor: pointer;
+		text-align: left;
 	}
 
 	.status-dot {
-		height: 0.5rem;
-		width: 0.5rem;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		height: 0.7rem;
+		width: 0.7rem;
 		border-radius: 999px;
-		background: #d1a15f;
+		background: currentColor;
+		color: #d1a15f;
 		box-shadow: 0 0 0 0.16rem rgba(209, 161, 95, 0.15);
 	}
 
 	.status-dot.connected {
-		background: #69d08b;
+		color: #69d08b;
 		box-shadow: 0 0 0 0.16rem rgba(105, 208, 139, 0.15);
 	}
 
 	.status-dot.error-state {
-		background: #d08266;
+		color: #d08266;
 		box-shadow: 0 0 0 0.16rem rgba(208, 130, 102, 0.15);
+	}
+
+	.status-dot.paused-status {
+		background: transparent;
+		box-shadow: none;
 	}
 
 	.content-grid {
