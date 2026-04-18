@@ -1950,6 +1950,13 @@
 		transition-delay: 320ms, 320ms, 320ms;
 	}
 
+	.project-row:has(.row-actions:hover) .row-tooltip-bubble {
+		opacity: 0;
+		visibility: hidden;
+		transform: translateY(-2px);
+		transition-delay: 0s, 0s, 0s;
+	}
+
 	.status-line[data-tooltip]:hover::after {
 		left: auto;
 		right: 0;

@@ -86,6 +86,16 @@
 
 		return 'stop';
 	}
+
+	function shouldShowServiceStatus(service: ComposeService) {
+		return service.state !== 'uncreated';
+	}
+
+	function serviceRowTooltipText(service: ComposeService) {
+		return service.health
+			? `${service.containerName}\n${service.stateText} (${service.health})`
+			: `${service.containerName}\n${service.stateText}`;
+	}
 </script>
 
 <div class="service-list">
@@ -104,15 +114,17 @@
 					</span>
 					<div class="service-copy">
 						<span class="service-title">{service.serviceName}</span>
-						<span class="service-status">
-							{service.stateText}
-							{#if service.health}
-								<span class="health-tag">({service.health})</span>
-							{/if}
-						</span>
+						{#if shouldShowServiceStatus(service)}
+							<span class="service-status">
+								{service.stateText}
+								{#if service.health}
+									<span class="health-tag">({service.health})</span>
+								{/if}
+							</span>
+						{/if}
 					</div>
 				</button>
-				<span class="row-tooltip-bubble" aria-hidden="true">{service.containerName}</span>
+				<span class="row-tooltip-bubble" aria-hidden="true">{serviceRowTooltipText(service)}</span>
 
 				<div class="row-actions">
 					<span
@@ -423,6 +435,13 @@
 		visibility: visible;
 		transform: translateY(0);
 		transition-delay: 320ms, 320ms, 320ms;
+	}
+
+	.service-row:has(.row-actions:hover) .row-tooltip-bubble {
+		opacity: 0;
+		visibility: hidden;
+		transform: translateY(-2px);
+		transition-delay: 0s, 0s, 0s;
 	}
 
 	.tooltip-anchor[data-tooltip]::after,
