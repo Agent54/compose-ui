@@ -1103,11 +1103,7 @@
 								<Icon name="chevron" size={13} rotated={expandedProjectIds.has(project.id)} />
 							</button>
 
-							<button
-								class="project-button row-tooltip"
-								type="button"
-								onmousedown={() => handleProjectSelect(project.id)}
-							>
+							<button class="project-button" type="button" onmousedown={() => handleProjectSelect(project.id)}>
 								<span class="project-copy">
 									<span class="project-name">
 										<Icon name="container" size={14} class={projectIconTone(project)} />
@@ -1125,8 +1121,8 @@
 									{/if}
 									{project.containerCount > 0 ? project.containerCount : ''}
 								</span>
-								<span class="row-tooltip-bubble" aria-hidden="true">{projectRowTooltipText(project)}</span>
 							</button>
+							<span class="row-tooltip-bubble" aria-hidden="true">{projectRowTooltipText(project)}</span>
 
 							<div class="row-actions">
 								{#if projectCanStart(project) || projectCanStop(project)}
@@ -1891,9 +1887,9 @@
 		pointer-events: none;
 		will-change: opacity, transform;
 		transition:
-			opacity 120ms ease,
-			transform 120ms ease,
-			visibility 0s linear 140ms;
+			opacity 0s linear 320ms,
+			transform 0s linear 320ms,
+			visibility 0s linear 320ms;
 		z-index: 30;
 	}
 
@@ -1901,7 +1897,7 @@
 	[data-tooltip]:not([data-tooltip='']):hover::after {
 		opacity: 1;
 		visibility: visible;
-		transition-delay: 320ms, 320ms, 0s;
+		transition-delay: 320ms, 320ms, 320ms;
 	}
 
 	.tooltip-anchor[data-tooltip]:hover::after {
@@ -1916,14 +1912,10 @@
 		transform: translateY(0);
 	}
 
-	.row-tooltip {
-		overflow: visible;
-	}
-
 	.row-tooltip-bubble {
 		position: absolute;
 		top: calc(100% + 0.42rem);
-		left: 0;
+		left: 1.8rem;
 		z-index: 40;
 		display: block;
 		box-sizing: border-box;
@@ -1946,16 +1938,16 @@
 		pointer-events: none;
 		transform: translateY(-2px);
 		transition:
-			opacity 120ms ease,
-			transform 120ms ease,
-			visibility 0s linear 140ms;
+			opacity 0s linear 320ms,
+			transform 0s linear 320ms,
+			visibility 0s linear 320ms;
 	}
 
-	.row-tooltip:hover .row-tooltip-bubble {
+	.project-row:hover .row-tooltip-bubble {
 		opacity: 1;
 		visibility: visible;
 		transform: translateY(0);
-		transition-delay: 320ms, 320ms, 0s;
+		transition-delay: 320ms, 320ms, 320ms;
 	}
 
 	.status-line[data-tooltip]:hover::after {

@@ -93,7 +93,7 @@
 		{#each services as service (service.id)}
 			<div class:selected={selectedContainerId === service.id} class="service-row">
 				<button
-					class="service-button row-tooltip"
+					class="service-button"
 					type="button"
 					aria-label={`Select ${service.serviceName}`}
 					oncontextmenu={(event) => onOpenContextMenu(event, project, service)}
@@ -111,8 +111,8 @@
 							{/if}
 						</span>
 					</div>
-					<span class="row-tooltip-bubble" aria-hidden="true">{service.containerName}</span>
 				</button>
+				<span class="row-tooltip-bubble" aria-hidden="true">{service.containerName}</span>
 
 				<div class="row-actions">
 					<span
@@ -387,10 +387,6 @@
 		transform: translateY(0);
 	}
 
-	.row-tooltip {
-		overflow: visible;
-	}
-
 	.row-tooltip-bubble {
 		position: absolute;
 		top: calc(100% + 0.42rem);
@@ -422,11 +418,11 @@
 			visibility 0s linear 140ms;
 	}
 
-	.row-tooltip:hover .row-tooltip-bubble {
+	.service-row:hover .row-tooltip-bubble {
 		opacity: 1;
 		visibility: visible;
 		transform: translateY(0);
-		transition-delay: 320ms, 320ms, 0s;
+		transition-delay: 320ms, 320ms, 320ms;
 	}
 
 	.tooltip-anchor[data-tooltip]::after,
