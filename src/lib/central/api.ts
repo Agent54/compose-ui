@@ -11,6 +11,7 @@ type ListedProject = {
 	directory?: string;
 	ConfigFiles?: string;
 	watch?: boolean;
+	watching?: boolean;
 	watchActive?: boolean;
 	watch_active?: boolean;
 	running?: boolean;
@@ -172,7 +173,11 @@ function toProject(raw: ListedProject, index: number): ComposeProject {
 				: 'stopped',
 		statusLabel: rawStatus || 'unknown',
 		containerCount,
-		watching: raw.watch === true || raw.watchActive === true || raw.watch_active === true,
+		watching:
+			raw.watch === true ||
+			raw.watching === true ||
+			raw.watchActive === true ||
+			raw.watch_active === true,
 		expanded: false,
 		updatedLabel: 'just now'
 	};
