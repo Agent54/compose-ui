@@ -1,4 +1,4 @@
-import type { ComposeProject, ComposeService, LogEntry, UiState } from './types';
+import type { ComposeBuild, ComposeProject, ComposeService, LogEntry, UiState } from './types';
 
 export const initialUiState: UiState[] = [
 	{
@@ -18,5 +18,7 @@ export const initialUiState: UiState[] = [
 export const initialProjects: ComposeProject[] = [];
 
 export const initialServices: ComposeService[] = [];
+
+export const initialBuilds: ComposeBuild[] = [];
 
 export const initialLogs: LogEntry[] = [];

@@ -6,8 +6,9 @@ import {
 } from '@tanstack/db';
 
 import { loadProjectServices } from './api';
-import { initialLogs, initialProjects, initialServices, initialUiState } from './sample-data';
+import { initialBuilds, initialLogs, initialProjects, initialServices, initialUiState } from './sample-data';
 import type {
+	ComposeBuild,
 	ComposeProject,
 	ComposeService,
 	ConnectionStatus,
@@ -86,6 +87,14 @@ export const logsCollection = createCollection(
 		id: 'compose-logs',
 		getKey: (item) => item.id,
 		initialData: initialLogs
+	})
+);
+
+export const buildsCollection = createCollection(
+	localOnlyCollectionOptions<ComposeBuild, string>({
+		id: 'compose-builds',
+		getKey: (item) => item.id,
+		initialData: initialBuilds
 	})
 );
 
@@ -385,12 +394,27 @@ export function setProjectExpanded(projectId: string, expanded: boolean) {
 	} else {
 		settingsCollection.insert({
 			id: 'localstorage',
-			expandedProjectIds: expanded ? [projectId] : []
+			expandedProjectIds: expanded ? [projectId] : [],
+			sidebarWidth: undefined
 		});
 	}
 
 	if (!expanded) {
 		loadedServicePaths.delete(projectId);
+	}
+}
+
+export function setSidebarWidth(sidebarWidth: number) {
+	if (settingsCollection.state.has('localstorage')) {
+		settingsCollection.update('localstorage', (draft: LocalSettings) => {
+			draft.sidebarWidth = sidebarWidth;
+		});
+	} else {
+		settingsCollection.insert({
+			id: 'localstorage',
+			expandedProjectIds: [],
+			sidebarWidth
+		});
 	}
 }
 
@@ -472,4 +496,19 @@ export function appendLog(projectId: string, level: LogEntry['level'], message: 
 		time: stampTime(),
 		message
 	});
+}
+
+export function hydrateBuilds(builds: ComposeBuild[]) {
+	const uniqueBuilds = [...new Map(builds.map((build) => [build.id, build])).values()];
+	const nextBuildIds = new Set(uniqueBuilds.map((build) => build.id));
+
+	for (const build of [...buildsCollection.state.values()] as ComposeBuild[]) {
+		if (!nextBuildIds.has(build.id)) {
+			buildsCollection.delete(build.id);
+		}
+	}
+
+	for (const build of uniqueBuilds) {
+		upsert(buildsCollection, build);
+	}
 }

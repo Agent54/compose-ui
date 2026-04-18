@@ -1,4 +1,10 @@
-import type { ComposeProcessSnapshot, ComposeProject, ComposeService, UiState } from './types';
+import type {
+	ComposeBuild,
+	ComposeProcessSnapshot,
+	ComposeProject,
+	ComposeService,
+	UiState
+} from './types';
 
 type ListedProject = {
 	name?: string;
@@ -38,11 +44,32 @@ type ListedContainer = {
 	status?: string;
 	Health?: string;
 	health?: string;
+	Labels?: Record<string, string>;
+	labels?: Record<string, string>;
 };
 
 type RefreshResult = {
 	projects: ComposeProject[];
 	services: ComposeService[];
+};
+
+type UpResponse = {
+	ok?: boolean;
+	project?: string;
+	configFiles?: string;
+	buildId?: string;
+	buildUrl?: string;
+	watching?: boolean;
+};
+
+type ListedBuild = {
+	id?: string;
+	project?: string;
+	status?: string;
+	startedAt?: string;
+	finishedAt?: string | null;
+	success?: boolean | null;
+	streamUrl?: string;
 };
 
 type ListedProcessSnapshot = {
@@ -68,6 +95,24 @@ function normalizeVersion(version: string) {
 function joinUrl(serverUrl: string, version: string, path: string) {
 	const base = serverUrl.trim().replace(/\/+$/, '');
 	return `${base}/v${normalizeVersion(version)}${path}`;
+}
+
+export function resolveBuildStreamUrl(ui: Pick<UiState, 'serverUrl' | 'apiVersion'>, streamUrl: string) {
+	const trimmed = streamUrl.trim();
+
+	if (!trimmed) {
+		return '';
+	}
+
+	if (/^https?:\/\//i.test(trimmed)) {
+		return trimmed;
+	}
+
+	if (/^\/v[0-9.]+\//i.test(trimmed)) {
+		return `${ui.serverUrl.trim().replace(/\/+$/, '')}${trimmed}`;
+	}
+
+	return joinUrl(ui.serverUrl, ui.apiVersion, trimmed);
 }
 
 function summarizeErrorPayload(payload: unknown): string {
@@ -254,6 +299,17 @@ function parseContainerName(raw: ListedContainer, fallback: string) {
 	return fallback;
 }
 
+function parseComposePath(raw: ListedContainer) {
+	const labels = raw.Labels ?? raw.labels;
+
+	if (!labels || typeof labels !== 'object') {
+		return undefined;
+	}
+
+	const composePath = labels['com.docker.compose.project.config_files']?.trim();
+	return composePath || undefined;
+}
+
 function toService(raw: ListedContainer, project: ComposeProject, index: number): ComposeService {
 	const serviceName = firstNonEmptyString(
 		raw.Service,
@@ -282,6 +338,7 @@ function toService(raw: ListedContainer, project: ComposeProject, index: number)
 		name: serviceName,
 		serviceName,
 		containerName,
+		composePath: parseComposePath(raw),
 		state: parseServiceState(rawState, rawStatus),
 		stateText: rawStatus || rawState || 'unknown',
 		health: parseHealth(raw)
@@ -334,6 +391,45 @@ function parseProcessSnapshots(payload: unknown) {
 	}
 
 	return [];
+}
+
+function parseBuilds(payload: unknown) {
+	if (Array.isArray(payload)) {
+		return payload as ListedBuild[];
+	}
+
+	if (payload && typeof payload === 'object') {
+		const objectPayload = payload as { builds?: unknown; items?: unknown };
+
+		if (Array.isArray(objectPayload.builds)) {
+			return objectPayload.builds as ListedBuild[];
+		}
+
+		if (Array.isArray(objectPayload.items)) {
+			return objectPayload.items as ListedBuild[];
+		}
+	}
+
+	return [];
+}
+
+function toBuild(raw: ListedBuild, index: number): ComposeBuild {
+	const id = String(raw.id ?? index + 1).trim();
+	const projectName = String(raw.project ?? '').trim() || `project-${index + 1}`;
+
+	return {
+		id,
+		projectId: projectName,
+		projectName,
+		status:
+			raw.status === 'succeeded' || raw.status === 'failed' || raw.status === 'running'
+				? raw.status
+				: 'running',
+		startedAt: String(raw.startedAt ?? ''),
+		finishedAt: raw.finishedAt ?? null,
+		success: typeof raw.success === 'boolean' ? raw.success : null,
+		streamUrl: String(raw.streamUrl ?? '').trim()
+	};
 }
 
 function toProcessSnapshot(
@@ -418,6 +514,13 @@ export async function startProject(
 	if (!response.ok) {
 		throw await responseError('Starting project via /up', response);
 	}
+
+	const payload = ((await response.json()) as UpResponse | null) ?? {};
+
+	return {
+		buildId: payload.buildId?.trim() || undefined,
+		buildUrl: payload.buildUrl?.trim() || undefined
+	};
 }
 
 async function postProjectAction(
@@ -509,6 +612,21 @@ export async function loadProjectServices(
 				.map((service) => [service.id, service] as const)
 		).values()
 	];
+}
+
+export async function loadBuilds(ui: UiState): Promise<ComposeBuild[]> {
+	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/builds'), {
+		headers: {
+			accept: 'application/json'
+		}
+	});
+
+	if (!response.ok) {
+		throw await responseError('Loading /builds', response);
+	}
+
+	const payload = (await response.json()) as unknown;
+	return parseBuilds(payload).map(toBuild);
 }
 
 export async function loadProjectProcesses(

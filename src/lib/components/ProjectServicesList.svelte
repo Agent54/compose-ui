@@ -9,6 +9,7 @@
 		project,
 		selectedContainerId,
 		busyAction,
+		buildingServiceId,
 		refreshEpoch,
 		onContainerSelect,
 		onStartStop,
@@ -19,6 +20,7 @@
 		project: ComposeProject;
 		selectedContainerId: string;
 		busyAction: string | null;
+		buildingServiceId?: string;
 		refreshEpoch: number;
 		onContainerSelect: (projectId: string, serviceId: string) => void;
 		onStartStop: (project: ComposeProject, service: ComposeService) => void;
@@ -91,6 +93,14 @@
 		return service.state !== 'uncreated';
 	}
 
+	function startButtonSpinning(service: ComposeService) {
+		return (
+			buildingServiceId === service.id ||
+			busyAction === `start:${project.id}:${service.id}` ||
+			busyAction === `up-no-build:${project.id}:${service.id}`
+		);
+	}
+
 	function serviceRowTooltipText(service: ComposeService) {
 		return service.health
 			? `${service.containerName}\n${service.stateText} (${service.health})`
@@ -149,28 +159,35 @@
 							disabled={busyAction !== null}
 						>
 							<Icon
-								name={service.state === 'running' || service.state === 'paused' ? 'stop' : 'play'}
+								name={
+									startButtonSpinning(service)
+										? 'refresh'
+										: service.state === 'running' || service.state === 'paused'
+											? 'stop'
+											: 'play'
+								}
 								size={13}
+								spinning={startButtonSpinning(service)}
 							/>
 						</button>
 					</span>
 
-					{#if service.state === 'running' || service.state === 'paused'}
+					{#if service.state === 'paused'}
 						<span
 							class="tooltip-anchor"
-							data-tooltip={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
+							data-tooltip={`Start ${service.serviceName}`}
 						>
 							<button
 								class="overlay-button"
 								type="button"
-								aria-label={`${service.state === 'paused' ? 'Unpause' : 'Pause'} ${service.serviceName}`}
+								aria-label={`Start ${service.serviceName}`}
 								onmousedown={(event) => {
 									if (!isPrimaryMouse(event)) return;
 									onPauseToggle(project, service);
 								}}
 								disabled={busyAction !== null}
 							>
-								<Icon name={service.state === 'paused' ? 'play' : 'pause'} size={13} />
+								<Icon name="play" size={13} />
 							</button>
 						</span>
 					{/if}

@@ -7,7 +7,10 @@
 	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
 	import {
 		appendLog,
+		buildsCollection,
 		checkHealth,
+		type ComposeBuild,
+		loadBuilds,
 		loadProjectProcesses,
 		type ComposeProcessSnapshot,
 		type ComposeProject,
@@ -15,12 +18,14 @@
 		type LocalSettings,
 		type LogEntry,
 		type UiState,
+		hydrateBuilds,
 		hydrateProjects,
 		invalidateProjectServices,
 		logsCollection,
 		pauseServices,
 		projectsCollection,
 		refreshProjectsFromServer,
+		resolveBuildStreamUrl,
 		reloadProjectServices,
 		selectContainer,
 		selectProject,
@@ -28,6 +33,7 @@
 		servicesCollection,
 		setConnectionState,
 		setProjectExpanded,
+		setSidebarWidth,
 		setProjectWatching,
 		stopServices,
 		startProject,
@@ -63,13 +69,27 @@
 		items: ContextMenuItem[];
 	};
 
+	type ActiveBuildTarget = {
+		projectId: string;
+		serviceId?: string;
+	};
+
+	const DEFAULT_SIDEBAR_WIDTH = 352;
+	const MIN_SIDEBAR_WIDTH = 248;
+	const MIN_PANEL_WIDTH = 320;
+	const MAX_SIDEBAR_WIDTH = 560;
+
 	let serviceQueryEpoch = $state(0);
 	let searchExpanded = $state(false);
 	let searchInput: HTMLInputElement | null = null;
+	let dragSidebarWidth = $state<number | null>(null);
+	let activeBuildTargets = $state<Record<string, ActiveBuildTarget>>({});
+	const buildEventSources = new Map<string, EventSource>();
 
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
 	const settingsQuery = useLiveQuery((q) => q.from({ settings: settingsCollection }));
+	const buildsQuery = useLiveQuery((q) => q.from({ builds: buildsCollection }));
 	const allLogsQuery = useLiveQuery((q) => q.from({ logs: logsCollection }));
 
 	const uiState = $derived((uiQuery.data?.[0] as UiState | undefined) ?? undefined);
@@ -81,6 +101,15 @@
 	const settings = $derived((settingsQuery.data?.[0] as LocalSettings | undefined) ?? undefined);
 	const expandedProjectIdList = $derived((settings?.expandedProjectIds ?? []).slice().sort());
 	const expandedProjectIds = $derived(new Set(expandedProjectIdList));
+	const sidebarWidth = $derived(dragSidebarWidth ?? settings?.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH);
+	const builds = $derived.by((): ComposeBuild[] => {
+		const entries = [...((buildsQuery.data ?? []) as ComposeBuild[])];
+		return entries.sort((left, right) => {
+			const leftTime = Date.parse(left.startedAt || '') || 0;
+			const rightTime = Date.parse(right.startedAt || '') || 0;
+			return rightTime - leftTime;
+		});
+	});
 
 	const allLogs = $derived((allLogsQuery.data ?? []) as LogEntry[]);
 
@@ -156,6 +185,14 @@
 			? selectedServices.find((service) => service.id === selectedContainerId)
 			: undefined
 	);
+	const selectedProjectBuilds = $derived(
+		selectedProject
+			? builds.filter(
+					(build) =>
+						build.projectId === selectedProject.id || build.projectName === selectedProject.name
+				)
+			: []
+	);
 	const selectedLogs = $derived(
 		selectedProject ? allLogs.filter((entry) => entry.projectId === selectedProject.id).slice().reverse() : []
 	);
@@ -226,6 +263,47 @@
 		}
 	}
 
+	function clampSidebarWidth(width: number) {
+		const viewportMax =
+			typeof window === 'undefined'
+				? MAX_SIDEBAR_WIDTH
+				: Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, window.innerWidth - MIN_PANEL_WIDTH));
+
+		return Math.max(MIN_SIDEBAR_WIDTH, Math.min(viewportMax, Math.round(width)));
+	}
+
+	function startSidebarResize(event: MouseEvent) {
+		if (!isPrimaryMouse(event) || typeof window === 'undefined' || window.innerWidth <= 700) {
+			return;
+		}
+
+		event.preventDefault();
+		contextMenu = null;
+
+		const initialWidth = sidebarWidth;
+		dragSidebarWidth = initialWidth;
+		document.body.style.cursor = 'col-resize';
+		document.body.style.userSelect = 'none';
+
+		const handleMove = (moveEvent: MouseEvent) => {
+			dragSidebarWidth = clampSidebarWidth(moveEvent.clientX);
+		};
+
+		const handleUp = () => {
+			window.removeEventListener('mousemove', handleMove);
+			window.removeEventListener('mouseup', handleUp);
+			document.body.style.cursor = '';
+			document.body.style.userSelect = '';
+
+			const settledWidth = clampSidebarWidth(dragSidebarWidth ?? initialWidth);
+			dragSidebarWidth = null;
+			setSidebarWidth(settledWidth);
+		};
+
+		window.addEventListener('mousemove', handleMove);
+		window.addEventListener('mouseup', handleUp, { once: true });
+	}
+
 	function statusLineText() {
 		const base = uiState?.statusDetail ?? 'Status unavailable.';
 		return `${base} ${autoRefreshPaused ? 'Polling paused.' : 'Polling every 5s.'}`;
@@ -235,8 +313,188 @@
 		return `${statusLineText()} ${autoRefreshPaused ? 'Click to resume polling.' : 'Click to pause polling.'}`;
 	}
 
+	function formatBuildTime(value: string | null) {
+		if (!value) {
+			return '';
+		}
+
+		const date = new Date(value);
+
+		if (Number.isNaN(date.getTime())) {
+			return '';
+		}
+
+		return new Intl.DateTimeFormat('en-GB', {
+			hour: '2-digit',
+			minute: '2-digit'
+		}).format(date);
+	}
+
+	function buildStateChipClass(build: ComposeBuild) {
+		if (build.status === 'running') {
+			return 'state-chip-running';
+		}
+
+		return build.status === 'succeeded' ? 'state-chip-running' : 'state-chip-exited';
+	}
+
+	function buildStatusLabel(build: ComposeBuild) {
+		if (build.status === 'running') {
+			return 'building';
+		}
+
+		return build.status === 'succeeded' ? 'succeeded' : 'failed';
+	}
+
+	function setActiveBuildTarget(buildId: string, target: ActiveBuildTarget | null) {
+		const nextTargets = { ...activeBuildTargets };
+
+		if (target) {
+			nextTargets[buildId] = target;
+		} else {
+			delete nextTargets[buildId];
+		}
+
+		activeBuildTargets = nextTargets;
+	}
+
+	function activeBuildTarget(projectId: string) {
+		for (const target of Object.values(activeBuildTargets)) {
+			if (target.projectId === projectId) {
+				return target;
+			}
+		}
+
+		return null;
+	}
+
+	function projectStartButtonSpinning(project: ComposeProject) {
+		const target = activeBuildTarget(project.id);
+		return (
+			Boolean(target && !target.serviceId) ||
+			busyAction === `start:${project.id}:project` ||
+			busyAction === `up-no-build:${project.id}:project`
+		);
+	}
+
+	function serviceStartButtonSpinning(project: ComposeProject, service: ComposeService) {
+		const target = activeBuildTarget(project.id);
+		return (
+			Boolean(target && target.serviceId === service.id) ||
+			busyAction === `start:${project.id}:${service.id}` ||
+			busyAction === `up-no-build:${project.id}:${service.id}`
+		);
+	}
+
+	function buildLogLevel(stream: string, message: string): LogEntry['level'] {
+		if (stream === 'stderr') {
+			return 'warn';
+		}
+
+		if (/fail|error/i.test(message)) {
+			return 'error';
+		}
+
+		return stream === 'status' ? 'info' : 'ok';
+	}
+
+	async function refreshBuildState() {
+		if (!uiState) {
+			return [] as ComposeBuild[];
+		}
+
+		try {
+			const nextBuilds = await loadBuilds(uiState);
+			hydrateBuilds(nextBuilds);
+
+			const runningIds = new Set(
+				nextBuilds.filter((build) => build.status === 'running').map((build) => build.id)
+			);
+
+			for (const buildId of Object.keys(activeBuildTargets)) {
+				if (!runningIds.has(buildId)) {
+					setActiveBuildTarget(buildId, null);
+				}
+			}
+
+			for (const build of nextBuilds) {
+				if (build.status === 'running' && build.streamUrl && !buildEventSources.has(build.id)) {
+					subscribeToBuild(build);
+				}
+			}
+
+			return nextBuilds;
+		} catch {
+			return [] as ComposeBuild[];
+		}
+	}
+
+	function closeBuildStream(buildId: string) {
+		const source = buildEventSources.get(buildId);
+
+		if (source) {
+			source.close();
+			buildEventSources.delete(buildId);
+		}
+	}
+
+	function subscribeToBuild(build: ComposeBuild) {
+		if (!uiState || !build.streamUrl || buildEventSources.has(build.id)) {
+			return;
+		}
+
+		const streamUrl = resolveBuildStreamUrl(uiState, build.streamUrl);
+
+		if (!streamUrl) {
+			return;
+		}
+
+		const source = new EventSource(streamUrl);
+		buildEventSources.set(build.id, source);
+		setActiveBuildTarget(build.id, activeBuildTargets[build.id] ?? { projectId: build.projectId });
+
+		source.addEventListener('message', (event) => {
+			try {
+				const payload = JSON.parse((event as MessageEvent).data) as {
+					project?: string;
+					stream?: string;
+					source?: string;
+					message?: string;
+				};
+				const projectId = String(payload.project ?? build.projectId).trim() || build.projectId;
+				const sourceLabel = String(payload.source ?? '').trim();
+				const message = String(payload.message ?? '').trim();
+
+				if (!message) {
+					return;
+				}
+
+				appendLog(
+					projectId,
+					buildLogLevel(String(payload.stream ?? ''), message),
+					sourceLabel ? `[${sourceLabel}] ${message}` : message
+				);
+			} catch {
+				// Ignore malformed buffered messages.
+			}
+		});
+
+		source.onerror = () => {
+			void refreshBuildState().then((nextBuilds) => {
+				const refreshedBuild = nextBuilds.find((entry) => entry.id === build.id);
+
+				if (!refreshedBuild || refreshedBuild.status !== 'running') {
+					closeBuildStream(build.id);
+					setActiveBuildTarget(build.id, null);
+					void refresh({ silent: true });
+				}
+			});
+		};
+	}
+
 	onMount(() => {
 		void refresh();
+		void refreshBuildState();
 
 		const intervalId = window.setInterval(() => {
 			const currentUi = uiStateCollection.state.get('app');
@@ -250,6 +508,10 @@
 
 		return () => {
 			window.clearInterval(intervalId);
+			for (const source of buildEventSources.values()) {
+				source.close();
+			}
+			buildEventSources.clear();
 		};
 	});
 
@@ -713,7 +975,40 @@
 				});
 				setConnectionState('connected', `Stopped ${service?.serviceName ?? project.name}.`);
 			} else if (service && service.state === 'uncreated') {
-				await startProject(uiState, project.path, project.watching, serviceNames);
+				const startResult = await startProject(
+					uiState,
+					service.composePath ?? project.path,
+					project.watching,
+					serviceNames
+				);
+				if (startResult.buildId && startResult.buildUrl) {
+					hydrateBuilds([
+						{
+							id: startResult.buildId,
+							projectId: project.id,
+							projectName: project.name,
+							status: 'running',
+							startedAt: new Date().toISOString(),
+							finishedAt: null,
+							success: null,
+							streamUrl: startResult.buildUrl
+						}
+					]);
+					setActiveBuildTarget(startResult.buildId, {
+						projectId: project.id,
+						serviceId: service.id
+					});
+					subscribeToBuild({
+						id: startResult.buildId,
+						projectId: project.id,
+						projectName: project.name,
+						status: 'running',
+						startedAt: new Date().toISOString(),
+						finishedAt: null,
+						success: null,
+						streamUrl: startResult.buildUrl
+					});
+				}
 				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up.`, {
 					serviceNames,
 					settleState: 'running'
@@ -727,7 +1022,34 @@
 				});
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (project.state === 'uncreated') {
-				await startProject(uiState, project.path, project.watching);
+				const startResult = await startProject(uiState, project.path, project.watching);
+				if (startResult.buildId && startResult.buildUrl) {
+					hydrateBuilds([
+						{
+							id: startResult.buildId,
+							projectId: project.id,
+							projectName: project.name,
+							status: 'running',
+							startedAt: new Date().toISOString(),
+							finishedAt: null,
+							success: null,
+							streamUrl: startResult.buildUrl
+						}
+					]);
+					setActiveBuildTarget(startResult.buildId, {
+						projectId: project.id
+					});
+					subscribeToBuild({
+						id: startResult.buildId,
+						projectId: project.id,
+						projectName: project.name,
+						status: 'running',
+						startedAt: new Date().toISOString(),
+						finishedAt: null,
+						success: null,
+						streamUrl: startResult.buildUrl
+					});
+				}
 				await syncAfterAction(project, `Started ${project.name} via /up.`, {
 					settleState: 'running'
 				});
@@ -760,7 +1082,13 @@
 		busyAction = `up-no-build:${project.id}:${service?.id ?? 'project'}`;
 
 		try {
-			await startProject(uiState, project.path, project.watching, serviceNames, false);
+			await startProject(
+				uiState,
+				service?.composePath ?? project.path,
+				project.watching,
+				serviceNames,
+				false
+			);
 			await syncAfterAction(
 				project,
 				`Started ${service?.serviceName ?? project.name} without rebuilding.`,
@@ -1027,7 +1355,7 @@
 	/>
 </svelte:head>
 
-<div class="workspace">
+<div class="workspace" style={`--sidebar-width:${sidebarWidth}px;`}>
 	<aside class="sidebar">
 		<div class="sidebar-controls">
 			<label class="sort-menu">
@@ -1154,27 +1482,37 @@
 											}}
 											disabled={busyAction !== null}
 										>
-											<Icon name={projectCanStop(project) ? 'stop' : 'play'} size={13} />
+											<Icon
+												name={
+													projectStartButtonSpinning(project)
+														? 'refresh'
+														: projectCanStop(project)
+															? 'stop'
+															: 'play'
+												}
+												size={13}
+												spinning={projectStartButtonSpinning(project)}
+											/>
 										</button>
 									</span>
 								{/if}
 
-								{#if projectCanPause(project)}
+								{#if isProjectFullyPaused(project)}
 									<span
 										class="tooltip-anchor"
-										data-tooltip={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
+										data-tooltip={`Start ${project.name}`}
 									>
 										<button
 											class="overlay-button"
 											type="button"
-											aria-label={`${isProjectFullyPaused(project) ? 'Unpause' : 'Pause'} ${project.name}`}
+											aria-label={`Start ${project.name}`}
 											onmousedown={(event) => {
 												if (!isPrimaryMouse(event)) return;
 												handlePauseToggle(project);
 											}}
 											disabled={busyAction !== null}
 										>
-											<Icon name={isProjectFullyPaused(project) ? 'play' : 'pause'} size={13} />
+											<Icon name="play" size={13} />
 										</button>
 									</span>
 								{/if}
@@ -1204,6 +1542,7 @@
 								{project}
 								{selectedContainerId}
 								{busyAction}
+								buildingServiceId={activeBuildTarget(project.id)?.serviceId}
 								refreshEpoch={serviceQueryEpoch}
 								onContainerSelect={handleContainerSelect}
 								onStartStop={handleStartStopToggle}
@@ -1219,6 +1558,13 @@
 			{/if}
 		</div>
 	</aside>
+
+	<button
+		class="sidebar-resizer"
+		type="button"
+		aria-label="Resize sidebar"
+		onmousedown={startSidebarResize}
+	></button>
 
 	<main class="panel">
 		<header class="panel-header">
@@ -1360,6 +1706,27 @@
 					<p class="eyebrow">Project activity</p>
 				</div>
 
+				{#if selectedProjectBuilds.length}
+					<div class="build-list">
+						{#each selectedProjectBuilds as build (build.id)}
+							<div class="build-row">
+								<div class="row-title">
+									Build #{build.id}
+									{#if build.status === 'running'}
+										<Icon name="refresh" size={12} spinning={true} />
+									{/if}
+								</div>
+								<div class="row-tail">
+									<span class={`state-chip ${buildStateChipClass(build)}`}>
+										{buildStatusLabel(build)}
+									</span>
+									<span>{formatBuildTime(build.finishedAt ?? build.startedAt)}</span>
+								</div>
+							</div>
+						{/each}
+					</div>
+				{/if}
+
 				{#if selectedLogs.length}
 					<div class="log-list">
 						{#each selectedLogs as entry (entry.id)}
@@ -1418,7 +1785,7 @@
 		display: grid;
 		height: 100vh;
 		min-height: 0;
-		grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
+		grid-template-columns: var(--sidebar-width, 22rem) 0.36rem minmax(0, 1fr);
 		background: #070708;
 		overflow: hidden;
 	}
@@ -1426,6 +1793,7 @@
 	.sidebar {
 		display: flex;
 		min-height: 0;
+		min-width: 0;
 		flex-direction: column;
 		container-type: inline-size;
 		border-right: 1px solid rgba(255, 255, 255, 0.08);
@@ -1433,6 +1801,31 @@
 			linear-gradient(180deg, rgba(14, 14, 15, 0.99), rgba(8, 8, 9, 0.99)),
 			#080809;
 		overflow: hidden;
+	}
+
+	.sidebar-resizer {
+		position: relative;
+		width: 0.36rem;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		cursor: col-resize;
+	}
+
+	.sidebar-resizer::before {
+		content: '';
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 50%;
+		width: 1px;
+		transform: translateX(-50%);
+		background: rgba(255, 255, 255, 0.07);
+		transition: background-color 120ms ease;
+	}
+
+	.sidebar-resizer:hover::before {
+		background: rgba(255, 255, 255, 0.16);
 	}
 
 	.panel-header,
@@ -2189,6 +2582,7 @@
 	}
 
 	.compact-list,
+	.build-list,
 	.process-list,
 	.log-list {
 		display: flex;
@@ -2199,6 +2593,7 @@
 	}
 
 	.compact-row,
+	.build-row,
 	.log-row {
 		display: flex;
 		align-items: center;
@@ -2207,6 +2602,10 @@
 		border-radius: 0.65rem;
 		padding: 0.55rem 0.65rem;
 		background: rgba(255, 255, 255, 0.015);
+	}
+
+	.build-list {
+		margin-bottom: 0.4rem;
 	}
 
 	.row-tail {
@@ -2435,6 +2834,10 @@
 		.sidebar {
 			min-height: 0;
 			border-right: 0;
+		}
+
+		.sidebar-resizer {
+			display: none;
 		}
 	}
 

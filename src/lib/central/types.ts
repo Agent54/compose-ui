@@ -45,6 +45,7 @@ export type ComposeService = {
 	name: string;
 	serviceName: string;
 	containerName: string;
+	composePath?: string;
 	state: 'running' | 'exited' | 'paused' | 'created' | 'uncreated' | 'unknown';
 	stateText: string;
 	health?: 'healthy' | 'unhealthy';
@@ -61,6 +62,17 @@ export type ComposeProcessSnapshot = {
 	processes: string[][];
 };
 
+export type ComposeBuild = {
+	id: string;
+	projectId: string;
+	projectName: string;
+	status: 'running' | 'succeeded' | 'failed';
+	startedAt: string;
+	finishedAt: string | null;
+	success: boolean | null;
+	streamUrl: string;
+};
+
 export type LogEntry = {
 	id: string;
 	projectId: string;
@@ -72,6 +84,7 @@ export type LogEntry = {
 export type LocalSettings = {
 	id: 'localstorage';
 	expandedProjectIds: string[];
+	sidebarWidth?: number;
 };
 
 export type UiState = {
