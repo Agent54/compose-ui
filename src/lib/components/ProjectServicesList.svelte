@@ -309,15 +309,15 @@
 	}
 
 	.service-state-uncreated {
-		color: #7b8087;
+		color: var(--app-text-subtle);
 	}
 
 	.service-state-created {
-		color: #97a2ad;
+		color: var(--app-text-muted);
 	}
 
 	.service-state-unknown {
-		color: #a8afb8;
+		color: var(--app-text-muted);
 	}
 
 	.service-copy {

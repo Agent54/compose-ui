@@ -2312,7 +2312,7 @@
 	}
 
 	:global(.project-icon-uncreated) {
-		color: #6f747a;
+		color: var(--app-text-subtle);
 	}
 
 	:global(.project-icon-running) {
@@ -2328,7 +2328,7 @@
 	}
 
 	:global(.project-icon-neutral) {
-		color: #9097a0;
+		color: var(--app-text-muted);
 	}
 
 	:global(.project-icon-exited) {
@@ -2408,7 +2408,7 @@
 	}
 
 	.service-state-uncreated {
-		color: #7b8087;
+		color: var(--app-text-subtle);
 	}
 
 	.service-copy {

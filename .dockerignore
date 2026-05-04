@@ -1,0 +1,10 @@
+.git
+.svelte-kit
+build
+node_modules
+
+.DS_Store
+*.log
+
+Dockerfile
+docker-compose*.yaml

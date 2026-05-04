@@ -7,18 +7,18 @@
 	font-family:
 		'SF Pro Text', 'Segoe UI', Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
 		sans-serif;
-	--app-bg: #000;
-	--app-surface: #030303;
-	--app-surface-raised: #070707;
-	--app-surface-hover: #101010;
-	--app-surface-active: #151515;
-	--app-border: rgba(255, 255, 255, 0.1);
-	--app-border-strong: rgba(255, 255, 255, 0.2);
-	--app-control: rgba(255, 255, 255, 0.045);
-	--app-control-hover: rgba(255, 255, 255, 0.08);
-	--app-text: #f4f4f4;
-	--app-text-muted: #a0a0a0;
-	--app-text-subtle: #747474;
+	--app-bg: #030507;
+	--app-surface: #06090c;
+	--app-surface-raised: #0a0e12;
+	--app-surface-hover: #111821;
+	--app-surface-active: #17212b;
+	--app-border: rgba(210, 220, 230, 0.085);
+	--app-border-strong: rgba(220, 230, 240, 0.16);
+	--app-control: rgba(96, 112, 128, 0.045);
+	--app-control-hover: rgba(116, 134, 152, 0.075);
+	--app-text: #dfe5eb;
+	--app-text-muted: #8e98a3;
+	--app-text-subtle: #626d78;
 	background: var(--app-bg);
 	color: var(--app-text);
 	font-feature-settings: 'ss01' 1, 'cv05' 1, 'tnum' 1;

@@ -5,7 +5,7 @@ WORKDIR /app
 COPY package.json .
 COPY deno.json .
 COPY deno.lock .
-RUN deno install --allow-scripts=npm:esbuild,npm:workerd,npm:@cloudflare/workerd-linux-arm64,npm:@rolldown/binding-linux-arm64-gnu
+RUN deno install --frozen --allow-scripts=npm:esbuild
 
 COPY . .
 

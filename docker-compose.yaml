@@ -1,18 +1,26 @@
-name: compose # docker compose --project-name "$(basename "$PWD")" up
+name: compose
 
 services:
   ui:
     build: .
     environment:
       - NODE_ENV=development
+      - DENO_NO_UPDATE_CHECK=1
+    init: true
     develop:
       watch:
         - action: sync
           path: ./src
           target: /app/src
-  
+
+        - action: sync
+          path: ./static
+          target: /app/static
+
         - action: rebuild
           path: ./package.json
+        - action: rebuild
+          path: ./deno.json
         - action: rebuild
           path: ./deno.lock
         - action: rebuild
