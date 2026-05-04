@@ -38,7 +38,6 @@
 		setProjectWatching,
 		stopServices,
 		startProject,
-		startServices,
 		startWatching,
 		stopWatching,
 		uiStateCollection,
@@ -486,7 +485,8 @@
 		return (
 			Boolean(target && !target.serviceId) ||
 			busyAction === `start:${project.id}:project` ||
-			busyAction === `up-no-build:${project.id}:project`
+			busyAction === `up-no-build:${project.id}:project` ||
+			busyAction === `restart:${project.id}:project`
 		);
 	}
 
@@ -495,8 +495,38 @@
 		return (
 			Boolean(target && target.serviceId === service.id) ||
 			busyAction === `start:${project.id}:${service.id}` ||
-			busyAction === `up-no-build:${project.id}:${service.id}`
+			busyAction === `up-no-build:${project.id}:${service.id}` ||
+			busyAction === `restart:${project.id}:${service.id}`
 		);
+	}
+
+	function registerStartedBuild(
+		project: ComposeProject,
+		startResult: { buildId?: string; buildUrl?: string },
+		service?: ComposeService
+	) {
+		if (!startResult.buildId || !startResult.buildUrl) {
+			return;
+		}
+
+		const build: ComposeBuild = {
+			id: startResult.buildId,
+			projectId: project.id,
+			projectName: project.name,
+			status: 'running',
+			startedAt: new Date().toISOString(),
+			finishedAt: null,
+			success: null,
+			streamUrl: startResult.buildUrl
+		};
+
+		appendLog(project.id, 'info', `${buildRowTitle(build)} started.`);
+		hydrateBuilds([build]);
+		setActiveBuildTarget(startResult.buildId, {
+			projectId: project.id,
+			...(service ? { serviceId: service.id } : {})
+		});
+		subscribeToBuild(build);
 	}
 
 	async function refreshBuildState() {
@@ -1098,102 +1128,37 @@
 					project.watching,
 					serviceNames
 				);
-				if (startResult.buildId && startResult.buildUrl) {
-					appendLog(project.id, 'info', `${buildRowTitle({
-						id: startResult.buildId,
-						projectId: project.id,
-						projectName: project.name,
-						status: 'running',
-						startedAt: new Date().toISOString(),
-						finishedAt: null,
-						success: null,
-						streamUrl: startResult.buildUrl
-					})} started.`);
-					hydrateBuilds([
-						{
-							id: startResult.buildId,
-							projectId: project.id,
-							projectName: project.name,
-							status: 'running',
-							startedAt: new Date().toISOString(),
-							finishedAt: null,
-							success: null,
-							streamUrl: startResult.buildUrl
-						}
-					]);
-					setActiveBuildTarget(startResult.buildId, {
-						projectId: project.id,
-						serviceId: service.id
-					});
-					subscribeToBuild({
-						id: startResult.buildId,
-						projectId: project.id,
-						projectName: project.name,
-						status: 'running',
-						startedAt: new Date().toISOString(),
-						finishedAt: null,
-						success: null,
-						streamUrl: startResult.buildUrl
-					});
-				}
+				registerStartedBuild(project, startResult, service);
 				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up.`, {
 					serviceNames,
 					settleState: 'running'
 				});
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (service) {
-				await startServices(uiState, project, serviceNames);
-				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name}.`, {
+				const startResult = await startProject(
+					uiState,
+					service.composePath ?? project.path,
+					project.watching,
+					serviceNames,
+					true
+				);
+				registerStartedBuild(project, startResult, service);
+				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up --build.`, {
 					serviceNames,
 					settleState: 'running'
 				});
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (project.state === 'uncreated') {
 				const startResult = await startProject(uiState, project.path, project.watching);
-				if (startResult.buildId && startResult.buildUrl) {
-					appendLog(project.id, 'info', `${buildRowTitle({
-						id: startResult.buildId,
-						projectId: project.id,
-						projectName: project.name,
-						status: 'running',
-						startedAt: new Date().toISOString(),
-						finishedAt: null,
-						success: null,
-						streamUrl: startResult.buildUrl
-					})} started.`);
-					hydrateBuilds([
-						{
-							id: startResult.buildId,
-							projectId: project.id,
-							projectName: project.name,
-							status: 'running',
-							startedAt: new Date().toISOString(),
-							finishedAt: null,
-							success: null,
-							streamUrl: startResult.buildUrl
-						}
-					]);
-					setActiveBuildTarget(startResult.buildId, {
-						projectId: project.id
-					});
-					subscribeToBuild({
-						id: startResult.buildId,
-						projectId: project.id,
-						projectName: project.name,
-						status: 'running',
-						startedAt: new Date().toISOString(),
-						finishedAt: null,
-						success: null,
-						streamUrl: startResult.buildUrl
-					});
-				}
+				registerStartedBuild(project, startResult);
 				await syncAfterAction(project, `Started ${project.name} via /up.`, {
 					settleState: 'running'
 				});
 				setConnectionState('connected', `Started ${project.name}.`);
 			} else {
-				await startServices(uiState, project);
-				await syncAfterAction(project, `Started services for ${project.name}.`, {
+				const startResult = await startProject(uiState, project.path, project.watching, undefined, true);
+				registerStartedBuild(project, startResult);
+				await syncAfterAction(project, `Started ${project.name} via /up --build.`, {
 					settleState: 'running'
 				});
 				setConnectionState('connected', `Started ${project.name}.`);
@@ -1243,6 +1208,39 @@
 				error,
 				`Failed to start ${service?.serviceName ?? project.name} without rebuilding.`
 			);
+			setConnectionState('error', message);
+			appendLog(project.id, 'error', message);
+		} finally {
+			busyAction = null;
+		}
+	}
+
+	async function handleRestart(project = selectedProject, service?: ComposeService) {
+		if (!project || !uiState || busyAction) {
+			return;
+		}
+
+		const serviceNames = service ? [service.serviceName] : undefined;
+		const targetName = service?.serviceName ?? project.name;
+		busyAction = `restart:${project.id}:${service?.id ?? 'project'}`;
+
+		try {
+			await stopServices(uiState, project, serviceNames);
+			const startResult = await startProject(
+				uiState,
+				service?.composePath ?? project.path,
+				project.watching,
+				serviceNames,
+				true
+			);
+			registerStartedBuild(project, startResult, service);
+			await syncAfterAction(project, `Restarted ${targetName} with rebuild.`, {
+				serviceNames,
+				settleState: 'running'
+			});
+			setConnectionState('connected', `Restarted ${targetName}.`);
+		} catch (error) {
+			const message = errorMessage(error, `Failed to restart ${targetName}.`);
 			setConnectionState('error', message);
 			appendLog(project.id, 'error', message);
 		} finally {
@@ -1379,6 +1377,11 @@
 				label: 'Stop',
 				action: () => void handleStartStopToggle(project)
 			});
+
+			items.push({
+				label: 'Restart',
+				action: () => void handleRestart(project)
+			});
 		}
 
 		if (canPause && !canUnpause) {
@@ -1440,6 +1443,11 @@
 			items.push({
 				label: 'Stop',
 				action: () => void handleStartStopToggle(project, service)
+			});
+
+			items.push({
+				label: 'Restart',
+				action: () => void handleRestart(project, service)
 			});
 		}
 
@@ -1657,6 +1665,30 @@
 									</span>
 								{/if}
 
+								{#if projectCanStop(project)}
+									<span
+										class="tooltip-anchor"
+										data-tooltip={`Restart ${project.name}`}
+									>
+										<button
+											class="overlay-button"
+											type="button"
+											aria-label={`Restart ${project.name}`}
+											onmousedown={(event) => {
+												if (!isPrimaryMouse(event)) return;
+												handleRestart(project);
+											}}
+											disabled={busyAction !== null}
+										>
+											<Icon
+												name="refresh"
+												size={13}
+												spinning={busyAction === `restart:${project.id}:project`}
+											/>
+										</button>
+									</span>
+								{/if}
+
 								{#if isProjectFullyPaused(project)}
 									<span
 										class="tooltip-anchor"
@@ -1707,6 +1739,7 @@
 								refreshEpoch={serviceQueryEpoch}
 								onContainerSelect={handleContainerSelect}
 								onStartStop={handleStartStopToggle}
+								onRestart={handleRestart}
 								onOpenContextMenu={openServiceContextMenu}
 								onPauseToggle={handlePauseToggle}
 								onWatchingToggle={handleWatchingToggle}

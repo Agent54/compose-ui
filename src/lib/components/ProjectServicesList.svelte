@@ -14,6 +14,7 @@
 		refreshEpoch,
 		onContainerSelect,
 		onStartStop,
+		onRestart,
 		onOpenContextMenu,
 		onPauseToggle,
 		onWatchingToggle
@@ -26,6 +27,7 @@
 		refreshEpoch: number;
 		onContainerSelect: (projectId: string, serviceId: string) => void;
 		onStartStop: (project: ComposeProject, service: ComposeService) => void;
+		onRestart: (project: ComposeProject, service: ComposeService) => void;
 		onOpenContextMenu: (event: MouseEvent, project: ComposeProject, service: ComposeService) => void;
 		onPauseToggle: (project: ComposeProject, service: ComposeService) => void;
 		onWatchingToggle: (project: ComposeProject) => void;
@@ -124,7 +126,8 @@
 		return (
 			buildingServiceId === service.id ||
 			busyAction === `start:${project.id}:${service.id}` ||
-			busyAction === `up-no-build:${project.id}:${service.id}`
+			busyAction === `up-no-build:${project.id}:${service.id}` ||
+			busyAction === `restart:${project.id}:${service.id}`
 		);
 	}
 
@@ -161,7 +164,9 @@
 						/>
 					</span>
 					<div class="service-copy">
-						<span class="service-title">{service.serviceName}</span>
+						<span class="service-title">
+							<span class="service-title-text">{service.serviceName}</span>
+						</span>
 						{#if shouldShowServiceStatus(service)}
 							<span class="service-status">
 								{service.stateText}
@@ -171,6 +176,13 @@
 							</span>
 						{/if}
 					</div>
+					<span class="service-meta">
+						{#if project.watching}
+							<span class="service-watch-indicator" aria-label="Watching">
+								<Icon name="eye" size={12} />
+							</span>
+						{/if}
+					</span>
 				</button>
 				<span class="row-tooltip-bubble" aria-hidden="true">{serviceRowTooltipText(service)}</span>
 
@@ -195,6 +207,30 @@
 							/>
 						</button>
 					</span>
+
+					{#if service.state === 'running' || service.state === 'paused'}
+						<span
+							class="tooltip-anchor"
+							data-tooltip={`Restart ${service.serviceName}`}
+						>
+							<button
+								class="overlay-button"
+								type="button"
+								aria-label={`Restart ${service.serviceName}`}
+								onmousedown={(event) => {
+									if (!isPrimaryMouse(event)) return;
+									onRestart(project, service);
+								}}
+								disabled={busyAction !== null}
+							>
+								<Icon
+									name="refresh"
+									size={13}
+									spinning={busyAction === `restart:${project.id}:${service.id}`}
+								/>
+							</button>
+						</span>
+					{/if}
 
 					{#if service.state === 'paused'}
 						<span
@@ -281,7 +317,7 @@
 		min-width: 0;
 		align-items: center;
 		gap: 0.58rem;
-		padding: 0.08rem 3.9rem 0.08rem 0;
+		padding: 0.08rem 0.42rem 0.08rem 0;
 		border: 0;
 		background: transparent;
 		color: inherit;
@@ -330,10 +366,39 @@
 	}
 
 	.service-title {
+		display: inline-flex;
+		min-width: 0;
+		align-items: center;
+		gap: 0.32rem;
 		font-weight: 600;
 		color: var(--app-text);
+	}
+
+	.service-title-text {
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	.service-watch-indicator {
+		display: inline-flex;
+		flex: none;
+		color: var(--app-text-muted);
+	}
+
+	.service-meta {
+		display: inline-flex;
+		min-width: 1rem;
+		flex: none;
+		align-items: center;
+		justify-content: flex-end;
+		margin-left: auto;
+		color: var(--app-text-muted);
+		transition: opacity 120ms ease;
+	}
+
+	.service-row:hover .service-meta {
+		opacity: 0;
 	}
 
 	.service-status {

@@ -1,10 +1,23 @@
 .git
+.gitignore
 .svelte-kit
 build
+coverage
+dist
 node_modules
 
 .DS_Store
+.env
+.env.*
 *.log
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 Dockerfile
 docker-compose*.yaml
+
+.vscode
+.idea

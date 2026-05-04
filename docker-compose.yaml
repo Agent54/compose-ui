@@ -7,6 +7,8 @@ services:
       - NODE_ENV=development
       - DENO_NO_UPDATE_CHECK=1
     init: true
+    ports:
+      - "${UI_PORT:-5177}:5173"
     develop:
       watch:
         - action: sync
@@ -27,5 +29,7 @@ services:
           path: ./svelte.config.js
         - action: rebuild
           path: ./vite.config.ts
+        - action: rebuild
+          path: ./tsconfig.json
         - action: rebuild
           path: ./Dockerfile
