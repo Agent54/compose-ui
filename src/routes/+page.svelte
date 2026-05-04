@@ -1783,7 +1783,9 @@
 								>
 									<span class="config-copy">
 										<span class="row-title">
-											<Icon name="chevron" size={12} rotated={panel.open} />
+											<span class="config-chevron">
+												<Icon name="chevron" size={12} rotated={panel.open} />
+											</span>
 											{filePath}
 										</span>
 									</span>
@@ -2008,7 +2010,7 @@
 		height: 100vh;
 		min-height: 0;
 		grid-template-columns: var(--sidebar-width, 22rem) 0.36rem minmax(0, 1fr);
-		background: #070708;
+		background: var(--app-bg);
 		overflow: hidden;
 	}
 
@@ -2018,10 +2020,8 @@
 		min-width: 0;
 		flex-direction: column;
 		container-type: inline-size;
-		border-right: 1px solid rgba(255, 255, 255, 0.08);
-		background:
-			linear-gradient(180deg, rgba(14, 14, 15, 0.99), rgba(8, 8, 9, 0.99)),
-			#080809;
+		border-right: 1px solid var(--app-border);
+		background: var(--app-bg);
 		overflow: hidden;
 	}
 
@@ -2042,12 +2042,12 @@
 		left: 50%;
 		width: 1px;
 		transform: translateX(-50%);
-		background: rgba(255, 255, 255, 0.07);
+		background: var(--app-border);
 		transition: background-color 120ms ease;
 	}
 
 	.sidebar-resizer:hover::before {
-		background: rgba(255, 255, 255, 0.16);
+		background: var(--app-border-strong);
 	}
 
 	.panel-header,
@@ -2074,7 +2074,7 @@
 		font-weight: 600;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		color: #8c9197;
+		color: var(--app-text-subtle);
 	}
 
 	.pill-row {
@@ -2101,12 +2101,12 @@
 		width: 1.65rem;
 		place-items: center;
 		border-radius: 0.48rem;
-		color: #9a9ea3;
+		color: var(--app-text-muted);
 	}
 
 	.refresh-button:hover:enabled {
-		background: rgba(255, 255, 255, 0.06);
-		color: #ebedf0;
+		background: var(--app-control-hover);
+		color: var(--app-text);
 	}
 
 	.refresh-button:disabled {
@@ -2128,12 +2128,12 @@
 		width: 1.75rem;
 		place-items: center;
 		border-radius: 0.45rem;
-		color: #92979d;
+		color: var(--app-text-muted);
 	}
 
 	.toggle:hover {
-		background: rgba(255, 255, 255, 0.06);
-		color: #e7eaed;
+		background: var(--app-control-hover);
+		color: var(--app-text);
 	}
 
 	.search {
@@ -2142,13 +2142,13 @@
 		justify-self: end;
 		gap: 0.5rem;
 		height: 1.95rem;
-		border: 1px solid rgba(255, 255, 255, 0.08);
+		border: 1px solid var(--app-border);
 		border-radius: 0.6rem;
-		background: rgba(255, 255, 255, 0.03);
+		background: var(--app-control);
 		width: 100%;
 		max-width: 100%;
 		padding: 0 0.58rem;
-		color: #93989e;
+		color: var(--app-text-muted);
 		overflow: hidden;
 		cursor: text;
 		transition:
@@ -2177,7 +2177,7 @@
 		min-height: 0;
 		border: 0;
 		background: transparent;
-		color: #e4e7ea;
+		color: var(--app-text);
 		padding: 0;
 		line-height: 1;
 		outline: none;
@@ -2214,7 +2214,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 0.42rem;
-		color: #878c91;
+		color: var(--app-text-subtle);
 	}
 
 	.sort-menu select {
@@ -2228,13 +2228,13 @@
 		font-size: 0.77rem;
 		font-weight: 600;
 		line-height: 1;
-		color: #a4a8ad;
+		color: var(--app-text-muted);
 		outline: none;
 	}
 
 	.sort-menu select:hover,
 	.sort-menu select:focus {
-		color: #d0d4d8;
+		color: var(--app-text);
 	}
 
 	.tree {
@@ -2262,7 +2262,7 @@
 		position: absolute;
 		inset: 0 0 0 calc(1.8rem - 7px);
 		border-radius: 0.5rem;
-		background: rgba(255, 255, 255, 0.05);
+		background: var(--app-control-hover);
 		pointer-events: none;
 	}
 
@@ -2298,7 +2298,7 @@
 		gap: 0.48rem;
 		font-size: 0.82rem;
 		font-weight: 600;
-		color: #eef0f2;
+		color: var(--app-text);
 	}
 
 	.project-status {
@@ -2308,7 +2308,7 @@
 		text-overflow: ellipsis;
 		line-height: 1;
 		font-size: 0.72rem;
-		color: #989ea6;
+		color: var(--app-text-muted);
 	}
 
 	:global(.project-icon-uncreated) {
@@ -2346,14 +2346,14 @@
 		text-align: right;
 		font-size: 0.72rem;
 		font-weight: 700;
-		color: #848b94;
+		color: var(--app-text-subtle);
 		transform: translateX(-6px);
 	}
 
 	.project-watch-indicator {
 		display: inline-flex;
 		align-items: center;
-		color: #8fa4b5;
+		color: var(--app-text-muted);
 	}
 
 	.service-list {
@@ -2371,7 +2371,7 @@
 	}
 
 	.service-row.selected {
-		background: rgba(255, 255, 255, 0.05);
+		background: var(--app-control-hover);
 		padding-left: 7px;
 	}
 
@@ -2421,17 +2421,17 @@
 		display: flex;
 		gap: 0.35rem;
 		font-weight: 600;
-		color: #eef0f2;
+		color: var(--app-text);
 	}
 
 	.service-container,
 	.row-subtitle {
-		color: #a4aab2;
+		color: var(--app-text-muted);
 		font-weight: 500;
 	}
 
 	.service-subtitle {
-		color: #969ca5;
+		color: var(--app-text-muted);
 	}
 
 	.health-tag {
@@ -2462,16 +2462,16 @@
 		width: 1.7rem;
 		place-items: center;
 		border-radius: 0.5rem;
-		border: 1px solid rgba(255, 255, 255, 0.11);
-		background: rgba(10, 10, 11, 0.98);
-		color: #d5d9de;
+		border: 1px solid var(--app-border);
+		background: var(--app-surface-raised);
+		color: var(--app-text-muted);
 		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.32);
 	}
 
 	.overlay-button:hover:enabled {
-		border-color: rgba(255, 255, 255, 0.16);
-		background: rgba(25, 25, 27, 0.99);
-		color: #f2f4f7;
+		border-color: var(--app-border-strong);
+		background: var(--app-surface-hover);
+		color: var(--app-text);
 	}
 
 	.overlay-button:disabled {
@@ -2503,11 +2503,11 @@
 		width: max-content;
 		max-width: min(18rem, calc(100cqw - 1rem));
 		padding: 0.36rem 0.52rem;
-		border: 1px solid rgba(255, 255, 255, 0.22);
+		border: 1px solid var(--app-border-strong);
 		border-radius: 0.45rem;
-		background: #050607 !important;
+		background: var(--app-bg) !important;
 		box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68);
-		color: #eef1f4;
+		color: var(--app-text);
 		font-size: 0.72rem;
 		line-height: 1.2;
 		white-space: pre-line;
@@ -2554,11 +2554,11 @@
 		width: max-content;
 		max-width: min(18rem, calc(100cqw - 2.4rem));
 		padding: 0.36rem 0.52rem;
-		border: 1px solid rgba(255, 255, 255, 0.22);
+		border: 1px solid var(--app-border-strong);
 		border-radius: 0.45rem;
-		background: #050607;
+		background: var(--app-bg);
 		box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68);
-		color: #eef1f4;
+		color: var(--app-text);
 		font-size: 0.72rem;
 		line-height: 1.2;
 		white-space: pre-line;
@@ -2616,9 +2616,9 @@
 		min-width: 12.5rem;
 		flex-direction: column;
 		padding: 0.28rem;
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		border: 1px solid var(--app-border);
 		border-radius: 0.7rem;
-		background: rgba(11, 11, 12, 0.98);
+		background: var(--app-surface-raised);
 		box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
 	}
 
@@ -2627,15 +2627,15 @@
 		border: 0;
 		border-radius: 0.48rem;
 		background: transparent;
-		color: #d9dde2;
+		color: var(--app-text);
 		font-size: 0.78rem;
 		text-align: left;
 		cursor: pointer;
 	}
 
 	.context-menu-item:hover {
-		background: rgba(255, 255, 255, 0.06);
-		color: #f1f4f7;
+		background: var(--app-control-hover);
+		color: var(--app-text);
 	}
 
 	.context-menu-item:disabled {
@@ -2645,7 +2645,7 @@
 
 	.context-menu-item:disabled:hover {
 		background: transparent;
-		color: #d9dde2;
+		color: var(--app-text);
 	}
 
 	.sidebar-empty,
@@ -2654,9 +2654,9 @@
 		display: grid;
 		place-items: center;
 		border-radius: 0.8rem;
-		background: rgba(255, 255, 255, 0.015);
+		background: var(--app-control);
 		font-size: 0.8rem;
-		color: #9aa1aa;
+		color: var(--app-text-muted);
 	}
 
 	.sidebar-empty {
@@ -2680,7 +2680,7 @@
 
 	.panel-header {
 		padding-bottom: 0.95rem;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+		border-bottom: 1px solid var(--app-border);
 	}
 
 	.panel-heading {
@@ -2697,7 +2697,7 @@
 		border: 0;
 		background: transparent;
 		font-size: 0.8rem;
-		color: #9aa1aa;
+		color: var(--app-text-muted);
 		cursor: pointer;
 		text-align: left;
 	}
@@ -2752,11 +2752,9 @@
 		display: flex;
 		min-height: 0;
 		flex-direction: column;
-		border: 1px solid rgba(255, 255, 255, 0.08);
+		border: 1px solid var(--app-border);
 		border-radius: 0.95rem;
-		background:
-			linear-gradient(180deg, rgba(17, 17, 18, 0.97), rgba(11, 11, 12, 0.99)),
-			#0b0b0c;
+		background: var(--app-surface);
 		padding: 0.95rem 1rem;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 	}
@@ -2784,11 +2782,11 @@
 
 	.pill {
 		border-radius: 999px;
-		background: rgba(255, 255, 255, 0.06);
+		background: var(--app-control-hover);
 		padding: 0.28rem 0.56rem;
 		font-size: 0.73rem;
 		font-weight: 700;
-		color: #9fa6af;
+		color: var(--app-text-muted);
 	}
 
 	.active-pill,
@@ -2825,7 +2823,7 @@
 		gap: 1rem;
 		border-radius: 0.65rem;
 		padding: 0.55rem 0.65rem;
-		background: rgba(255, 255, 255, 0.015);
+		background: var(--app-surface-raised);
 	}
 
 	.config-list {
@@ -2846,14 +2844,14 @@
 		padding: 0.5rem 0.65rem;
 		border: 0;
 		border-radius: 0.65rem;
-		background: rgba(255, 255, 255, 0.015);
+		background: var(--app-surface-raised);
 		color: inherit;
 		cursor: pointer;
 		text-align: left;
 	}
 
 	.config-button:hover {
-		background: rgba(255, 255, 255, 0.03);
+		background: var(--app-surface-hover);
 	}
 
 	.config-copy {
@@ -2869,14 +2867,14 @@
 
 	.config-output {
 		border-radius: 0.7rem;
-		background: rgba(255, 255, 255, 0.02);
+		background: var(--app-bg);
 		overflow: auto;
 	}
 
 	.config-output pre {
 		margin: 0;
 		padding: 0.8rem 0.9rem;
-		color: #d7dde4;
+		color: var(--app-text);
 		font-size: 0.73rem;
 		line-height: 1.45;
 		white-space: pre-wrap;
@@ -2889,7 +2887,7 @@
 		align-items: center;
 		gap: 0.45rem;
 		padding: 0.8rem 0.9rem;
-		color: #9ea5ae;
+		color: var(--app-text-muted);
 		font-size: 0.76rem;
 	}
 
@@ -2905,7 +2903,7 @@
 
 	.build-stream-source {
 		min-width: 4.5rem;
-		color: #98a0a8;
+		color: var(--app-text-subtle);
 		font-size: 0.72rem;
 		font-weight: 600;
 	}
@@ -2915,7 +2913,7 @@
 		align-items: center;
 		gap: 0.55rem;
 		font-size: 0.77rem;
-		color: #a3aab3;
+		color: var(--app-text-muted);
 	}
 
 	.state-chip {
@@ -2986,8 +2984,8 @@
 	}
 
 	.log-info {
-		background: rgba(255, 255, 255, 0.08);
-		color: #ccd2d8;
+		background: var(--app-control-hover);
+		color: var(--app-text-muted);
 	}
 
 	.log-warn {
@@ -3002,12 +3000,12 @@
 
 	.log-time {
 		width: 3rem;
-		color: #848c95;
+		color: var(--app-text-subtle);
 		font-variant-numeric: tabular-nums;
 	}
 
 	.log-message {
-		color: #dce0e5;
+		color: var(--app-text);
 	}
 
 	.process-group {
@@ -3016,7 +3014,7 @@
 		gap: 0.45rem;
 		border-radius: 0.75rem;
 		padding: 0.7rem;
-		background: rgba(255, 255, 255, 0.015);
+		background: var(--app-surface-raised);
 	}
 
 	.process-heading {
@@ -3029,8 +3027,8 @@
 	.process-replica {
 		border-radius: 999px;
 		padding: 0.18rem 0.48rem;
-		background: rgba(255, 255, 255, 0.06);
-		color: #c6cbd2;
+		background: var(--app-control-hover);
+		color: var(--app-text-muted);
 		font-size: 0.7rem;
 		font-weight: 700;
 	}
@@ -3053,7 +3051,7 @@
 		flex-direction: column;
 		gap: 0.5rem;
 		border-radius: 0.55rem;
-		background: rgba(255, 255, 255, 0.02);
+		background: var(--app-bg);
 		padding: 0.6rem;
 	}
 
@@ -3075,14 +3073,14 @@
 		font-weight: 700;
 		letter-spacing: 0.05em;
 		text-transform: uppercase;
-		color: #98a0a8;
+		color: var(--app-text-subtle);
 	}
 
 	.process-meta-item strong,
 	.command-name {
 		font-size: 0.8rem;
 		font-weight: 600;
-		color: #eceff2;
+		color: var(--app-text);
 	}
 
 	.command-card {
@@ -3095,7 +3093,7 @@
 
 	.command-path {
 		font-size: 0.68rem;
-		color: #9199a2;
+		color: var(--app-text-subtle);
 		font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
 		justify-self: end;
 		max-width: 20rem;
@@ -3115,7 +3113,7 @@
 
 	.command-inline-args {
 		font-size: 0.74rem;
-		color: #b4bac2;
+		color: var(--app-text-muted);
 		font-family: 'SF Mono', 'Monaco', 'Cascadia Code', monospace;
 		word-break: break-word;
 	}

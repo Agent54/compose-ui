@@ -269,7 +269,7 @@
 		position: absolute;
 		inset: 0 0 0 -7px;
 		border-radius: 0.55rem;
-		background: rgba(255, 255, 255, 0.05);
+		background: var(--app-control-hover);
 		pointer-events: none;
 	}
 
@@ -331,7 +331,7 @@
 
 	.service-title {
 		font-weight: 600;
-		color: #eef0f2;
+		color: var(--app-text);
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
@@ -341,7 +341,7 @@
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		color: #969ca5;
+		color: var(--app-text-muted);
 	}
 
 	.health-tag {
@@ -373,17 +373,17 @@
 		width: 1.7rem;
 		place-items: center;
 		border-radius: 0.5rem;
-		border: 1px solid rgba(255, 255, 255, 0.11);
-		background: rgba(10, 10, 11, 0.98);
-		color: #d5d9de;
+		border: 1px solid var(--app-border);
+		background: var(--app-surface-raised);
+		color: var(--app-text-muted);
 		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.32);
 		cursor: pointer;
 	}
 
 	.overlay-button:hover:enabled {
-		border-color: rgba(255, 255, 255, 0.16);
-		background: rgba(25, 25, 27, 0.99);
-		color: #f2f4f7;
+		border-color: var(--app-border-strong);
+		background: var(--app-surface-hover);
+		color: var(--app-text);
 	}
 
 	.overlay-button:disabled {
@@ -415,11 +415,11 @@
 		width: max-content;
 		max-width: min(18rem, calc(100cqw - 1rem));
 		padding: 0.36rem 0.52rem;
-		border: 1px solid rgba(255, 255, 255, 0.22);
+		border: 1px solid var(--app-border-strong);
 		border-radius: 0.45rem;
-		background: #050607 !important;
+		background: var(--app-bg) !important;
 		box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68);
-		color: #eef1f4;
+		color: var(--app-text);
 		font-size: 0.72rem;
 		line-height: 1.2;
 		white-space: pre-line;
@@ -466,11 +466,11 @@
 		width: max-content;
 		max-width: min(18rem, calc(100cqw - 2.4rem));
 		padding: 0.36rem 0.52rem;
-		border: 1px solid rgba(255, 255, 255, 0.22);
+		border: 1px solid var(--app-border-strong);
 		border-radius: 0.45rem;
-		background: #050607;
+		background: var(--app-bg);
 		box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68);
-		color: #eef1f4;
+		color: var(--app-text);
 		font-size: 0.72rem;
 		line-height: 1.2;
 		white-space: pre-line;
@@ -512,9 +512,9 @@
 		margin-right: 0.5rem;
 		min-height: 2.3rem;
 		border-radius: 0.8rem;
-		background: rgba(255, 255, 255, 0.015);
+		background: var(--app-control);
 		font-size: 0.74rem;
-		color: #9aa1aa;
+		color: var(--app-text-muted);
 	}
 
 	.service-row-loading {
@@ -527,6 +527,6 @@
 	}
 
 	.service-state-loading {
-		color: #8f969f;
+		color: var(--app-text-subtle);
 	}
 </style>
