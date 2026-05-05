@@ -68,6 +68,11 @@ export const apiSchema: ApiSchema = {
 					description: 'Start watch mode after up succeeds'
 				},
 				{
+					name: 'removeOrphans',
+					type: 'boolean',
+					description: 'Remove containers for services no longer defined in the Compose file'
+				},
+				{
 					name: 'services',
 					type: 'string[]',
 					description: 'Optional service names'

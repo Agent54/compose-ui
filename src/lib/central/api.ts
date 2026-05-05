@@ -513,6 +513,7 @@ export async function startProject(
 			path,
 			build,
 			watch: watching,
+			removeOrphans: true,
 			...(services?.length ? { services } : {})
 		})
 	});
@@ -566,6 +567,7 @@ export async function stopServices(
 	services?: string[]
 ) {
 	await postProjectAction(ui, project.path, 'stop', project.id, {
+		removeOrphans: true,
 		...(services?.length ? { services } : {})
 	});
 }
