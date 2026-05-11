@@ -38,8 +38,6 @@
 		setProjectWatching,
 		stopServices,
 		startProject,
-		startWatching,
-		stopWatching,
 		uiStateCollection,
 		unpauseServices,
 		updateUiState
@@ -103,7 +101,9 @@
 	let activeBuildTargets = $state<Record<string, ActiveBuildTarget>>({});
 	let buildStreamEntries = $state<BuildStreamEntry[]>([]);
 	let configPanels = $state<Record<string, ConfigPanelState>>({});
+	let buildPanels = $state<Record<string, boolean>>({});
 	const buildEventSources = new Map<string, EventSource>();
+	const watchEventSources = new Map<string, EventSource>();
 
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
@@ -210,11 +210,6 @@
 					(build) =>
 						build.projectId === selectedProject.id || build.projectName === selectedProject.name
 				)
-			: []
-	);
-	const selectedBuildEntries = $derived(
-		selectedProject
-			? buildStreamEntries.filter((entry) => entry.projectId === selectedProject.id).slice().reverse()
 			: []
 	);
 	const selectedLogs = $derived(
@@ -374,6 +369,21 @@
 		return build.projectName ? `${build.projectName} build #${build.id}` : `Build #${build.id}`;
 	}
 
+	function buildPanelOpen(buildId: string) {
+		return buildPanels[buildId] ?? false;
+	}
+
+	function toggleBuildPanel(buildId: string) {
+		buildPanels = {
+			...buildPanels,
+			[buildId]: !buildPanelOpen(buildId)
+		};
+	}
+
+	function buildStreamEntriesForBuild(buildId: string) {
+		return buildStreamEntries.filter((entry) => entry.buildId === buildId);
+	}
+
 	function composeFilePaths(project: ComposeProject | undefined) {
 		if (!project?.path) {
 			return [];
@@ -486,8 +496,50 @@
 			Boolean(target && !target.serviceId) ||
 			busyAction === `start:${project.id}:project` ||
 			busyAction === `up-no-build:${project.id}:project` ||
-			busyAction === `restart:${project.id}:project`
+			busyAction === `restart:${project.id}:project` ||
+			busyAction === `watching:${project.id}`
 		);
+	}
+
+	function projectPendingStatusLabel(project: ComposeProject) {
+		if (busyAction === `watching:${project.id}`) {
+			return project.watching ? 'stopping watch' : 'enabling watch';
+		}
+
+		if (busyAction === `restart:${project.id}:project`) {
+			return 'restarting';
+		}
+
+		if (
+			busyAction === `start:${project.id}:project` ||
+			busyAction === `up-no-build:${project.id}:project`
+		) {
+			return 'starting';
+		}
+
+		const target = activeBuildTarget(project.id);
+
+		if (target && !target.serviceId) {
+			return 'building';
+		}
+
+		return '';
+	}
+
+	function projectDisplayStatusLabel(project: ComposeProject | undefined) {
+		if (!project) {
+			return 'Unknown';
+		}
+
+		return projectPendingStatusLabel(project) || project.statusLabel || 'Unknown';
+	}
+
+	function projectDisplayChipClass(project: ComposeProject | undefined) {
+		if (!project) {
+			return '';
+		}
+
+		return projectPendingStatusLabel(project) ? 'warn-state' : projectStateChipClass(project);
 	}
 
 	function serviceStartButtonSpinning(project: ComposeProject, service: ComposeService) {
@@ -500,11 +552,53 @@
 		);
 	}
 
+	function servicePendingStatusLabel(project: ComposeProject | undefined, service: ComposeService) {
+		if (!project) {
+			return '';
+		}
+
+		if (busyAction === `restart:${project.id}:${service.id}`) {
+			return 'restarting';
+		}
+
+		if (
+			busyAction === `start:${project.id}:${service.id}` ||
+			busyAction === `up-no-build:${project.id}:${service.id}`
+		) {
+			return 'starting';
+		}
+
+		const target = activeBuildTarget(project.id);
+
+		if (target?.serviceId === service.id) {
+			return 'building';
+		}
+
+		return '';
+	}
+
+	function serviceDisplayStateLabel(project: ComposeProject | undefined, service: ComposeService) {
+		return servicePendingStatusLabel(project, service) || service.state;
+	}
+
+	function serviceDisplayStatusText(project: ComposeProject | undefined, service: ComposeService) {
+		return servicePendingStatusLabel(project, service) || service.stateText;
+	}
+
+	function serviceDisplayChipClass(project: ComposeProject | undefined, service: ComposeService) {
+		return servicePendingStatusLabel(project, service) ? 'state-chip-mixed' : serviceStateChipClass(service);
+	}
+
 	function registerStartedBuild(
 		project: ComposeProject,
-		startResult: { buildId?: string; buildUrl?: string },
+		startResult: { buildId?: string; buildUrl?: string; watching?: boolean; watchUrl?: string },
 		service?: ComposeService
 	) {
+		if (startResult.watching || startResult.watchUrl) {
+			setProjectWatching(project.id, true);
+			subscribeToWatch(project, startResult.watchUrl);
+		}
+
 		if (!startResult.buildId || !startResult.buildUrl) {
 			return;
 		}
@@ -639,6 +733,76 @@
 		};
 	}
 
+	function closeWatchStream(projectId: string) {
+		const source = watchEventSources.get(projectId);
+
+		if (source) {
+			source.close();
+			watchEventSources.delete(projectId);
+		}
+	}
+
+	function subscribeToWatch(project: Pick<ComposeProject, 'id' | 'name'>, watchUrl?: string) {
+		if (!uiState || watchEventSources.has(project.id)) {
+			return;
+		}
+
+		const streamUrl = resolveBuildStreamUrl(
+			uiState,
+			watchUrl || `/watch/${encodeURIComponent(project.name || project.id)}`
+		);
+
+		if (!streamUrl) {
+			return;
+		}
+
+		const source = new EventSource(streamUrl);
+		watchEventSources.set(project.id, source);
+
+		source.addEventListener('message', (event) => {
+			try {
+				const payload = JSON.parse((event as MessageEvent).data) as {
+					project?: string;
+					stream?: string;
+					source?: string;
+					message?: string;
+					time?: string;
+				};
+				const payloadProject = String(payload.project ?? '').trim();
+				const projectId = !payloadProject || payloadProject === project.name ? project.id : payloadProject;
+				const sourceLabel = String(payload.source ?? '').trim() || 'Watch';
+				const stream = String(payload.stream ?? '').trim().toLowerCase();
+				const message = String(payload.message ?? '').trim();
+
+				if (!message) {
+					return;
+				}
+
+				appendLog(projectId, stream === 'stderr' ? 'error' : 'info', `${sourceLabel}: ${message}`);
+			} catch {
+				// Ignore malformed watch messages.
+			}
+		});
+	}
+
+	function syncWatchStreams(projects: ComposeProject[]) {
+		const watchingProjectIds = new Set(
+			projects.filter((project) => project.watching).map((project) => project.id)
+		);
+
+		for (const projectId of watchEventSources.keys()) {
+			if (!watchingProjectIds.has(projectId)) {
+				closeWatchStream(projectId);
+			}
+		}
+
+		for (const project of projects) {
+			if (project.watching) {
+				subscribeToWatch(project);
+			}
+		}
+	}
+
 	onMount(() => {
 		void refresh();
 		void refreshBuildState();
@@ -659,6 +823,10 @@
 				source.close();
 			}
 			buildEventSources.clear();
+			for (const source of watchEventSources.values()) {
+				source.close();
+			}
+			watchEventSources.clear();
 		};
 	});
 
@@ -852,6 +1020,10 @@
 	}
 
 	function shouldShowProjectRowStatus(project: ComposeProject) {
+		if (projectPendingStatusLabel(project)) {
+			return true;
+		}
+
 		const matches = [...project.statusLabel.matchAll(/([a-z-]+)(?:\((\d+)\))?/gi)];
 
 		if (matches.length !== 1) {
@@ -1060,6 +1232,7 @@
 			await checkHealth(uiState);
 			const result = await refreshProjectsFromServer(uiState);
 			hydrateProjects(result.projects, result.services);
+			syncWatchStreams(result.projects);
 			invalidateProjectServices();
 
 			if (!options?.silent || uiState.status !== 'connected') {
@@ -1225,16 +1398,16 @@
 		busyAction = `restart:${project.id}:${service?.id ?? 'project'}`;
 
 		try {
-			await stopServices(uiState, project, serviceNames);
 			const startResult = await startProject(
 				uiState,
 				service?.composePath ?? project.path,
 				project.watching,
 				serviceNames,
-				true
+				true,
+				{ forceRecreate: true }
 			);
 			registerStartedBuild(project, startResult, service);
-			await syncAfterAction(project, `Restarted ${targetName} with rebuild.`, {
+			await syncAfterAction(project, `Recreated ${targetName} via /up --build.`, {
 				serviceNames,
 				settleState: 'running'
 			});
@@ -1302,15 +1475,18 @@
 		busyAction = `watching:${project.id}`;
 
 		try {
+			const startResult = await startProject(uiState, project.path, nextWatching, undefined, true);
+
 			if (nextWatching) {
-				await startWatching(uiState, project.id, project.path);
-				appendLog(project.id, 'ok', `Started watching ${project.name}.`);
+				registerStartedBuild(project, startResult);
+				appendLog(project.id, 'ok', `Started ${project.name} with watch mode.`);
 			} else {
-				await stopWatching(uiState, project.id);
-				appendLog(project.id, 'info', `Stopped watching ${project.name}.`);
+				closeWatchStream(project.id);
+				appendLog(project.id, 'info', `Started ${project.name} without watch mode.`);
 			}
 
 			setProjectWatching(project.id, nextWatching);
+			await refresh({ silent: true });
 			setConnectionState(
 				'connected',
 				`${nextWatching ? 'Watching' : 'Stopped watching'} ${project.name}.`
@@ -1630,7 +1806,7 @@
 										{project.name}
 									</span>
 									{#if shouldShowProjectRowStatus(project)}
-										<span class="project-status">{projectRowStatusLabel(project)}</span>
+										<span class="project-status">{projectPendingStatusLabel(project) || projectRowStatusLabel(project)}</span>
 									{/if}
 								</span>
 								<span class="project-meta">
@@ -1723,7 +1899,11 @@
 										}}
 										disabled={busyAction !== null}
 									>
-										<Icon name={project.watching ? 'eye-off' : 'eye'} size={13} />
+										<Icon
+											name={busyAction === `watching:${project.id}` ? 'refresh' : project.watching ? 'eye-off' : 'eye'}
+											size={13}
+											spinning={busyAction === `watching:${project.id}`}
+										/>
 									</button>
 								</span>
 							</div>
@@ -1791,8 +1971,8 @@
 				<div class="card-header">
 					<p class="eyebrow">Project</p>
 					<div class="pill-row">
-						<span class={`pill ${projectStateChipClass(selectedProject)}`}>
-							{selectedProject?.statusLabel ?? 'Unknown'}
+						<span class={`pill ${projectDisplayChipClass(selectedProject)}`}>
+							{projectDisplayStatusLabel(selectedProject)}
 						</span>
 						<span class:active-pill={selectedProject?.watching} class="pill">
 							{selectedProject?.watching ? 'Watching' : 'Not Watching'}
@@ -1852,11 +2032,11 @@
 									<div class="row-subtitle">{service.containerName}</div>
 								</div>
 								<div class="row-tail">
-									<span class={`state-chip ${serviceStateChipClass(service)}`}>
-										{service.state}
+									<span class={`state-chip ${serviceDisplayChipClass(selectedProject, service)}`}>
+										{serviceDisplayStateLabel(selectedProject, service)}
 									</span>
-									<span>{service.stateText}</span>
-									{#if service.health}
+									<span>{serviceDisplayStatusText(selectedProject, service)}</span>
+									{#if service.health && !servicePendingStatusLabel(selectedProject, service)}
 										<span class="health-tag">({service.health})</span>
 									{/if}
 								</div>
@@ -1946,36 +2126,60 @@
 				{#if selectedProjectBuilds.length}
 					<div class="build-list">
 						{#each selectedProjectBuilds as build (build.id)}
-							<div class="build-row">
-								<div class="row-title">
-									{buildRowTitle(build)}
-									{#if build.status === 'running'}
-										<Icon name="refresh" size={12} spinning={true} />
-									{/if}
-								</div>
-								<div class="row-tail">
-									<span class={`state-chip ${buildStateChipClass(build)}`}>
-										{buildStatusLabel(build)}
+							{@const entries = buildStreamEntriesForBuild(build.id)}
+							<div class="build-item">
+								<button
+									class="build-button"
+									type="button"
+									aria-pressed={buildPanelOpen(build.id)}
+									onmousedown={(event) => {
+										if (!isPrimaryMouse(event)) return;
+										toggleBuildPanel(build.id);
+									}}
+								>
+									<span class="build-copy">
+										<span class="row-title">
+											<span class="config-chevron">
+												<Icon name="chevron" size={12} rotated={buildPanelOpen(build.id)} />
+											</span>
+											{buildRowTitle(build)}
+											{#if build.status === 'running'}
+												<Icon name="refresh" size={12} spinning={true} />
+											{/if}
+										</span>
 									</span>
-									<span>{formatBuildTime(build.finishedAt ?? build.startedAt)}</span>
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
+									<span class="row-tail">
+										<span class={`state-chip ${buildStateChipClass(build)}`}>
+											{buildStatusLabel(build)}
+										</span>
+										<span>{formatBuildTime(build.finishedAt ?? build.startedAt)}</span>
+									</span>
+								</button>
 
-				{#if selectedBuildEntries.length}
-					<div class="build-stream-list">
-						{#each selectedBuildEntries as entry (entry.id)}
-							<div class="build-stream-row">
-								<span class="log-time">{entry.time}</span>
-								<span class="build-stream-source">{entry.source}</span>
-								<span class="log-message">{entry.message}</span>
+								{#if buildPanelOpen(build.id)}
+									<div class="build-output">
+										{#if entries.length}
+											<div class="build-stream-list">
+												{#each entries as entry (entry.id)}
+													<div class="build-stream-row">
+														<span class="log-time">{entry.time}</span>
+														<span class="build-stream-source">{entry.source}</span>
+														<span class="log-message">{entry.message}</span>
+													</div>
+												{/each}
+											</div>
+										{:else}
+											<div class="config-output-state">
+												{build.status === 'running' ? 'Waiting for build output…' : 'No output captured for this build.'}
+											</div>
+										{/if}
+									</div>
+								{/if}
 							</div>
 						{/each}
 					</div>
-				{:else if !selectedProjectBuilds.length}
-					<div class="empty-state">No build output yet.</div>
+				{:else}
+					<div class="empty-state">No builds yet.</div>
 				{/if}
 			</section>
 
@@ -2863,17 +3067,20 @@
 		margin-bottom: 0.65rem;
 	}
 
-	.config-item {
+	.config-item,
+	.build-item {
 		display: flex;
 		flex-direction: column;
 		gap: 0.12rem;
 	}
 
-	.config-button {
+	.config-button,
+	.build-button {
 		display: flex;
 		width: 100%;
 		align-items: center;
 		justify-content: space-between;
+		gap: 1rem;
 		padding: 0.5rem 0.65rem;
 		border: 0;
 		border-radius: 0.65rem;
@@ -2883,22 +3090,26 @@
 		text-align: left;
 	}
 
-	.config-button:hover {
+	.config-button:hover,
+	.build-button:hover {
 		background: var(--app-surface-hover);
 	}
 
-	.config-copy {
+	.config-copy,
+	.build-copy {
 		display: flex;
 		min-width: 0;
 		flex-direction: column;
 		gap: 0.18rem;
 	}
 
-	.config-copy .row-title {
+	.config-copy .row-title,
+	.build-copy .row-title {
 		align-items: center;
 	}
 
-	.config-output {
+	.config-output,
+	.build-output {
 		border-radius: 0.7rem;
 		background: var(--app-bg);
 		overflow: auto;

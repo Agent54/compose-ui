@@ -73,6 +73,11 @@ export const apiSchema: ApiSchema = {
 					description: 'Remove containers for services no longer defined in the Compose file'
 				},
 				{
+					name: 'forceRecreate',
+					type: 'boolean',
+					description: 'Recreate containers instead of reusing existing ones'
+				},
+				{
 					name: 'services',
 					type: 'string[]',
 					description: 'Optional service names'
@@ -84,25 +89,6 @@ export const apiSchema: ApiSchema = {
 			path: '/watch/{project}',
 			versioned: true,
 			summary: 'Stream watch logs for a project as SSE'
-		},
-		{
-			method: 'POST',
-			path: '/watch/{project}',
-			versioned: true,
-			summary: 'Start or restart a watch resource for an already upped project',
-			bodyFields: [
-				{
-					name: 'path',
-					type: 'string',
-					description: 'Optional project path relative to the serve root'
-				}
-			]
-		},
-		{
-			method: 'DELETE',
-			path: '/watch/{project}',
-			versioned: true,
-			summary: "Stop a project's watch resource without stopping the running containers"
 		}
 	]
 };

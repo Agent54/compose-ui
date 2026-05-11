@@ -16,10 +16,13 @@ type ListedProject = {
 	dir?: string;
 	directory?: string;
 	ConfigFiles?: string;
-	watch?: boolean;
-	watching?: boolean;
-	watchActive?: boolean;
-	watch_active?: boolean;
+	watch?: boolean | string | number;
+	Watch?: boolean | string | number;
+	watching?: boolean | string | number;
+	Watching?: boolean | string | number;
+	watchActive?: boolean | string | number;
+	WatchActive?: boolean | string | number;
+	watch_active?: boolean | string | number;
 	running?: boolean;
 	active?: boolean;
 	state?: string;
@@ -60,6 +63,7 @@ type UpResponse = {
 	buildId?: string;
 	buildUrl?: string;
 	watching?: boolean;
+	watchUrl?: string;
 };
 
 type ListedBuild = {
@@ -191,6 +195,18 @@ function normalizeListedState(rawState: string, rawStatus: string) {
 	return 'unknown' as const;
 }
 
+function isTruthyFlag(value: unknown) {
+	if (value === true || value === 1) {
+		return true;
+	}
+
+	if (typeof value === 'string') {
+		return ['1', 'true', 'yes', 'on', 'watching', 'active'].includes(value.trim().toLowerCase());
+	}
+
+	return false;
+}
+
 function toProject(raw: ListedProject, index: number): ComposeProject {
 	const name = raw.Name ?? raw.name ?? raw.project ?? raw.ID ?? raw.id ?? `project-${index + 1}`;
 	const sourceId = raw.ID ?? raw.id ?? name;
@@ -219,10 +235,13 @@ function toProject(raw: ListedProject, index: number): ComposeProject {
 		statusLabel: rawStatus || 'unknown',
 		containerCount,
 		watching:
-			raw.watch === true ||
-			raw.watching === true ||
-			raw.watchActive === true ||
-			raw.watch_active === true,
+			isTruthyFlag(raw.watch) ||
+			isTruthyFlag(raw.Watch) ||
+			isTruthyFlag(raw.watching) ||
+			isTruthyFlag(raw.Watching) ||
+			isTruthyFlag(raw.watchActive) ||
+			isTruthyFlag(raw.WatchActive) ||
+			isTruthyFlag(raw.watch_active),
 		expanded: false,
 		updatedLabel: 'just now'
 	};
@@ -502,7 +521,10 @@ export async function startProject(
 	path: string,
 	watching: boolean,
 	services?: string[],
-	build = true
+	build = true,
+	options?: {
+		forceRecreate?: boolean;
+	}
 ) {
 	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/up'), {
 		method: 'POST',
@@ -514,6 +536,7 @@ export async function startProject(
 			build,
 			watch: watching,
 			removeOrphans: true,
+			...(options?.forceRecreate ? { forceRecreate: true } : {}),
 			...(services?.length ? { services } : {})
 		})
 	});
@@ -526,7 +549,9 @@ export async function startProject(
 
 	return {
 		buildId: payload.buildId?.trim() || undefined,
-		buildUrl: payload.buildUrl?.trim() || undefined
+		buildUrl: payload.buildUrl?.trim() || undefined,
+		watching: payload.watching,
+		watchUrl: payload.watchUrl?.trim() || undefined
 	};
 }
 
@@ -685,28 +710,4 @@ export async function loadProjectProcesses(
 
 	const payload = (await response.json()) as unknown;
 	return parseProcessSnapshots(payload).map((entry) => toProcessSnapshot(entry, project));
-}
-
-export async function startWatching(ui: UiState, project: string, path?: string) {
-	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, `/watch/${project}`), {
-		method: 'POST',
-		headers: {
-			'content-type': 'application/json'
-		},
-		body: JSON.stringify(path ? { path } : {})
-	});
-
-	if (!response.ok) {
-		throw await responseError(`Starting watch for ${project}`, response);
-	}
-}
-
-export async function stopWatching(ui: UiState, project: string) {
-	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, `/watch/${project}`), {
-		method: 'DELETE'
-	});
-
-	if (!response.ok) {
-		throw await responseError(`Stopping watch for ${project}`, response);
-	}
 }

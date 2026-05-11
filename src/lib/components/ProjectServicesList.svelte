@@ -119,7 +119,7 @@
 	}
 
 	function shouldShowServiceStatus(service: ComposeService) {
-		return service.state !== 'uncreated';
+		return Boolean(servicePendingStatusLabel(service)) || service.state !== 'uncreated';
 	}
 
 	function startButtonSpinning(service: ComposeService) {
@@ -131,7 +131,36 @@
 		);
 	}
 
+	function servicePendingStatusLabel(service: ComposeService) {
+		if (busyAction === `restart:${project.id}:${service.id}`) {
+			return 'restarting';
+		}
+
+		if (
+			busyAction === `start:${project.id}:${service.id}` ||
+			busyAction === `up-no-build:${project.id}:${service.id}`
+		) {
+			return 'starting';
+		}
+
+		if (buildingServiceId === service.id) {
+			return 'building';
+		}
+
+		return '';
+	}
+
+	function serviceDisplayStatusLabel(service: ComposeService) {
+		return servicePendingStatusLabel(service) || service.stateText;
+	}
+
 	function serviceRowTooltipText(service: ComposeService) {
+		const pendingStatus = servicePendingStatusLabel(service);
+
+		if (pendingStatus) {
+			return `${service.containerName}\n${pendingStatus}`;
+		}
+
 		return service.health
 			? `${service.containerName}\n${service.stateText} (${service.health})`
 			: `${service.containerName}\n${service.stateText}`;
@@ -169,8 +198,8 @@
 						</span>
 						{#if shouldShowServiceStatus(service)}
 							<span class="service-status">
-								{service.stateText}
-								{#if service.health}
+								{serviceDisplayStatusLabel(service)}
+								{#if service.health && !servicePendingStatusLabel(service)}
 									<span class="health-tag">({service.health})</span>
 								{/if}
 							</span>
@@ -266,7 +295,11 @@
 							}}
 							disabled={busyAction !== null}
 						>
-							<Icon name={project.watching ? 'eye-off' : 'eye'} size={13} />
+							<Icon
+								name={busyAction === `watching:${project.id}` ? 'refresh' : project.watching ? 'eye-off' : 'eye'}
+								size={13}
+								spinning={busyAction === `watching:${project.id}`}
+							/>
 						</button>
 					</span>
 				</div>
