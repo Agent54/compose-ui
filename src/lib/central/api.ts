@@ -3,6 +3,7 @@ import type {
 	ComposeProcessSnapshot,
 	ComposeProject,
 	ComposeService,
+	ProjectResources,
 	UiState
 } from './types';
 
@@ -16,6 +17,10 @@ type ListedProject = {
 	dir?: string;
 	directory?: string;
 	ConfigFiles?: string;
+	configFiles?: string;
+	config_files?: string;
+	ConfigFile?: string;
+	configFile?: string;
 	watch?: boolean | string | number;
 	Watch?: boolean | string | number;
 	watching?: boolean | string | number;
@@ -47,6 +52,10 @@ type ListedContainer = {
 	status?: string;
 	Health?: string;
 	health?: string;
+	path?: string;
+	composePath?: string;
+	configFiles?: string;
+	ConfigFiles?: string;
 	Labels?: Record<string, string>;
 	labels?: Record<string, string>;
 };
@@ -117,6 +126,60 @@ export function resolveBuildStreamUrl(ui: Pick<UiState, 'serverUrl' | 'apiVersio
 	}
 
 	return joinUrl(ui.serverUrl, ui.apiVersion, trimmed);
+}
+
+export function composeLogsStreamUrl(
+	ui: Pick<UiState, 'serverUrl' | 'apiVersion'>,
+	project: string,
+	options?: {
+		path?: string;
+		services?: string[];
+		follow?: boolean;
+		tail?: string;
+		since?: string;
+		until?: string;
+		timestamps?: boolean;
+		index?: string;
+	}
+) {
+	const params = new URLSearchParams();
+
+	if (options?.path) {
+		params.set('path', options.path);
+	}
+
+	for (const service of options?.services ?? []) {
+		params.append('service', service);
+	}
+
+	if (typeof options?.follow === 'boolean') {
+		params.set('follow', String(options.follow));
+	}
+
+	if (options?.tail) {
+		params.set('tail', options.tail);
+	}
+
+	if (options?.since) {
+		params.set('since', options.since);
+	}
+
+	if (options?.until) {
+		params.set('until', options.until);
+	}
+
+	if (typeof options?.timestamps === 'boolean') {
+		params.set('timestamps', String(options.timestamps));
+	}
+
+	if (options?.index) {
+		params.set('index', options.index);
+	}
+
+	const query = params.toString();
+	const path = `/logs/${encodeURIComponent(project)}`;
+
+	return `${joinUrl(ui.serverUrl, ui.apiVersion, path)}${query ? `?${query}` : ''}`;
 }
 
 function summarizeErrorPayload(payload: unknown): string {
@@ -223,7 +286,16 @@ function toProject(raw: ListedProject, index: number): ComposeProject {
 	return {
 		id,
 		name,
-		path: raw.ConfigFiles ?? raw.path ?? raw.dir ?? raw.directory ?? `./${name}`,
+		path:
+			raw.ConfigFiles ??
+			raw.configFiles ??
+			raw.config_files ??
+			raw.ConfigFile ??
+			raw.configFile ??
+			raw.path ??
+			raw.dir ??
+			raw.directory ??
+			`./${name}`,
 		state:
 			normalizedState === 'running' ||
 			normalizedState === 'paused' ||
@@ -325,6 +397,17 @@ function parseContainerName(raw: ListedContainer, fallback: string) {
 }
 
 function parseComposePath(raw: ListedContainer) {
+	const directPath = firstNonEmptyString(
+		raw.composePath,
+		raw.configFiles,
+		raw.ConfigFiles,
+		raw.path
+	);
+
+	if (directPath) {
+		return directPath;
+	}
+
 	const labels = raw.Labels ?? raw.labels;
 
 	if (!labels || typeof labels !== 'object') {
@@ -446,6 +529,7 @@ function toBuild(raw: ListedBuild, index: number): ComposeBuild {
 		id,
 		projectId: projectName,
 		projectName,
+		kind: 'build',
 		status:
 			raw.status === 'succeeded' || raw.status === 'failed' || raw.status === 'running'
 				? raw.status
@@ -597,6 +681,18 @@ export async function stopServices(
 	});
 }
 
+export async function removeServices(
+	ui: UiState,
+	project: Pick<ComposeProject, 'id' | 'path'>,
+	services?: string[]
+) {
+	await postProjectAction(ui, project.path, 'rm', project.id, {
+		force: true,
+		stop: true,
+		...(services?.length ? { services } : {})
+	});
+}
+
 export async function pauseServices(
 	ui: UiState,
 	project: Pick<ComposeProject, 'id' | 'path'>,
@@ -660,6 +756,150 @@ export async function loadBuilds(ui: UiState): Promise<ComposeBuild[]> {
 
 	const payload = (await response.json()) as unknown;
 	return parseBuilds(payload).map(toBuild);
+}
+
+export async function loadSystemInfo(ui: UiState): Promise<Record<string, unknown>> {
+	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/system'), {
+		headers: {
+			accept: 'application/json'
+		}
+	});
+
+	if (!response.ok) {
+		throw await responseError('Loading /system', response);
+	}
+
+	return ((await response.json()) as Record<string, unknown> | null) ?? {};
+}
+
+export async function loadSystemDiskUsage(ui: UiState): Promise<Record<string, unknown>> {
+	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/system/df'), {
+		headers: {
+			accept: 'application/json'
+		}
+	});
+
+	if (!response.ok) {
+		throw await responseError('Loading /system/df', response);
+	}
+
+	return ((await response.json()) as Record<string, unknown> | null) ?? {};
+}
+
+export async function loadProjectResources(
+	ui: UiState,
+	project: Pick<ComposeProject, 'name' | 'id' | 'path'>,
+	options?: {
+		path?: string;
+		services?: string[];
+		all?: boolean;
+		granularity?: 'all' | 'container' | 'service' | 'project';
+	}
+): Promise<ProjectResources> {
+	const params = new URLSearchParams();
+
+	if (options?.path) {
+		params.set('path', options.path);
+	}
+
+	for (const service of options?.services ?? []) {
+		params.append('service', service);
+	}
+
+	if (typeof options?.all === 'boolean') {
+		params.set('all', String(options.all));
+	}
+
+	if (options?.granularity) {
+		params.set('granularity', options.granularity);
+	}
+
+	const query = params.toString();
+	const projectName = project.name || project.id;
+	const response = await fetch(
+		`${joinUrl(ui.serverUrl, ui.apiVersion, `/resources/${encodeURIComponent(projectName)}`)}${query ? `?${query}` : ''}`,
+		{
+			headers: {
+				accept: 'application/json'
+			}
+		}
+	);
+
+	if (!response.ok) {
+		throw await responseError(`Loading /resources for ${projectName}`, response);
+	}
+
+	return ((await response.json()) as ProjectResources | null) ?? {
+		project: projectName,
+		granularity: options?.granularity ?? 'all'
+	};
+}
+
+export async function executeProjectCommand(
+	ui: UiState,
+	project: Pick<ComposeProject, 'name' | 'id'>,
+	body: {
+		path?: string;
+		container?: string;
+		service?: string;
+		index?: number;
+		command?: string[];
+		shell?: string;
+		shellExecutable?: string;
+		workingDir?: string;
+		user?: string;
+		env?: string[];
+		privileged?: boolean;
+		tty?: boolean;
+		startStopped?: boolean;
+	}
+) {
+	const projectName = project.name || project.id;
+	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, `/exec/${encodeURIComponent(projectName)}`), {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json'
+		},
+		body: JSON.stringify(body)
+	});
+
+	if (!response.ok) {
+		throw await responseError(`Starting /exec for ${projectName}`, response);
+	}
+
+	return ((await response.json()) as Record<string, unknown> | null) ?? {};
+}
+
+export async function killProjectProcess(
+	ui: UiState,
+	project: Pick<ComposeProject, 'name' | 'id'>,
+	body: {
+		path?: string;
+		container?: string;
+		service?: string;
+		index?: number;
+		pid: number;
+		signal?: string;
+		hard?: boolean;
+	}
+) {
+	const projectName = project.name || project.id;
+	const response = await fetch(
+		joinUrl(ui.serverUrl, ui.apiVersion, `/top/${encodeURIComponent(projectName)}/kill`),
+		{
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json'
+			},
+			body: JSON.stringify(body)
+		}
+	);
+
+	if (!response.ok) {
+		throw await responseError(`Killing process for ${projectName}`, response);
+	}
+
+	return ((await response.json()) as Record<string, unknown> | null) ?? {};
 }
 
 export async function loadProjectConfig(

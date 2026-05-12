@@ -6,6 +6,7 @@ services:
     environment:
       - NODE_ENV=development
       - DENO_NO_UPDATE_CHECK=1
+      - TINI_SUBREAPER=1
     init: true
     ports:
       - "${UI_PORT:-5177}:5173"
@@ -14,22 +15,13 @@ services:
         - action: sync
           path: ./src
           target: /app/src
-
-        - action: sync
-          path: ./static
-          target: /app/static
-
+          ignore:
+            - app.d.ts
         - action: rebuild
           path: ./package.json
         - action: rebuild
           path: ./deno.json
         - action: rebuild
           path: ./deno.lock
-        - action: rebuild
-          path: ./svelte.config.js
-        - action: rebuild
-          path: ./vite.config.ts
-        - action: rebuild
-          path: ./tsconfig.json
         - action: rebuild
           path: ./Dockerfile

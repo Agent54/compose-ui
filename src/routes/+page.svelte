@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { eq } from '@tanstack/db';
 	import { useLiveQuery } from '@tanstack/svelte-db';
 	import { onMount, tick } from 'svelte';
@@ -9,15 +10,25 @@
 		appendLog,
 		buildsCollection,
 		checkHealth,
+		composeLogsStreamUrl,
+		executeProjectCommand,
 		type ComposeBuild,
+		killProjectProcess,
 		loadProjectConfig,
 		loadBuilds,
 		loadProjectProcesses,
+		loadProjectResources,
+		loadSystemDiskUsage,
+		loadSystemInfo,
 		type ComposeProcessSnapshot,
 		type ComposeProject,
 		type ComposeService,
 		type LocalSettings,
 		type LogEntry,
+		type ProjectResources,
+		type ResourceLimits,
+		type ResourceUsage,
+		type ResourceUtilization,
 		type UiState,
 		hydrateBuilds,
 		hydrateProjects,
@@ -26,6 +37,7 @@
 		pauseServices,
 		projectsCollection,
 		refreshProjectsFromServer,
+		removeServices,
 		resolveBuildStreamUrl,
 		reloadProjectServices,
 		selectContainer,
@@ -59,6 +71,7 @@
 		label: string;
 		action: () => void;
 		disabled?: boolean;
+		danger?: boolean;
 	};
 
 	type ContextMenuState = {
@@ -82,11 +95,44 @@
 		message: string;
 	};
 
+	type ServiceLogEntry = {
+		id: string;
+		projectId: string;
+		serviceId: string;
+		time: string;
+		source: string;
+		stream: string;
+		message: string;
+		isError: boolean;
+		isCommand?: boolean;
+		commandStatus?: 'running' | 'succeeded' | 'failed';
+		execId?: string;
+	};
+
 	type ConfigPanelState = {
 		open: boolean;
 		loading: boolean;
 		error: string;
 		content: string;
+	};
+
+	type Toast = {
+		id: string;
+		level: 'ok' | 'info' | 'warn' | 'error';
+		title: string;
+		message: string;
+	};
+
+	type ResourceMetric = {
+		label: string;
+		value: string;
+		hoverValue: string;
+		tooltip: string;
+	};
+
+	type HashSelection = {
+		projectId: string;
+		serviceId: string;
 	};
 
 	const DEFAULT_SIDEBAR_WIDTH = 352;
@@ -100,10 +146,22 @@
 	let dragSidebarWidth = $state<number | null>(null);
 	let activeBuildTargets = $state<Record<string, ActiveBuildTarget>>({});
 	let buildStreamEntries = $state<BuildStreamEntry[]>([]);
+	let serviceLogEntries = $state<Record<string, ServiceLogEntry[]>>({});
+	let serviceLogPanels = $state<Record<string, boolean>>({});
+	let serviceCommandInputs = $state<Record<string, string>>({});
+	let serviceCommandBusy = $state<Record<string, boolean>>({});
+	let processPanels = $state<Record<string, boolean>>({});
 	let configPanels = $state<Record<string, ConfigPanelState>>({});
 	let buildPanels = $state<Record<string, boolean>>({});
+	let toasts = $state<Toast[]>([]);
+	let toastSequence = 0;
 	const buildEventSources = new Map<string, EventSource>();
 	const watchEventSources = new Map<string, EventSource>();
+	const serviceLogEventSources = new Map<string, EventSource>();
+	const execCommandLogEntries = new Map<string, { key: string; entryId: string }>();
+	const pendingExecCompletions = new Map<string, number>();
+	const watchBuildIds = new Map<string, string>();
+	const watchBuildTargets = new Map<string, ActiveBuildTarget>();
 
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
@@ -206,10 +264,16 @@
 	);
 	const selectedProjectBuilds = $derived(
 		selectedProject
-			? builds.filter(
-					(build) =>
-						build.projectId === selectedProject.id || build.projectName === selectedProject.name
-				)
+			? [
+					...new Map(
+						builds
+							.filter(
+								(build) =>
+									build.projectId === selectedProject.id || build.projectName === selectedProject.name
+							)
+							.map((build) => [build.id, build] as const)
+					).values()
+				]
 			: []
 	);
 	const selectedLogs = $derived(
@@ -220,10 +284,59 @@
 	let topLoading = $state(false);
 	let topError = $state('');
 	let processSnapshots = $state<ComposeProcessSnapshot[]>([]);
+	let systemInfo = $state<Record<string, unknown> | null>(null);
+	let systemDiskUsage = $state<Record<string, unknown> | null>(null);
+	let projectResources = $state<ProjectResources | null>(null);
+	let pendingHashSelection = $state<HashSelection | null>(
+		browser ? parseSelectionHash(window.location.hash) : null
+	);
 	let contextMenu = $state<ContextMenuState | null>(null);
 	const ACTION_SETTLE_ATTEMPTS = 8;
 	const ACTION_SETTLE_DELAY_MS = 350;
 	const LS_POLL_INTERVAL_MS = 5000;
+
+	function parseSelectionHash(hash: string): HashSelection | null {
+		const raw = hash.replace(/^#/, '').replace(/^\?/, '');
+
+		if (!raw) {
+			return null;
+		}
+
+		const params = new URLSearchParams(raw);
+		const projectId = params.get('project') || params.get('p') || '';
+		const serviceId = params.get('service') || params.get('container') || params.get('c') || '';
+
+		if (!projectId) {
+			return null;
+		}
+
+		return { projectId, serviceId };
+	}
+
+	function selectionHash(projectId: string, serviceId: string) {
+		const params = new URLSearchParams();
+		params.set('project', projectId);
+
+		if (serviceId) {
+			params.set('service', serviceId);
+		}
+
+		return `#${params.toString()}`;
+	}
+
+	function writeSelectionHash(projectId: string, serviceId: string) {
+		if (!browser || !projectId) {
+			return;
+		}
+
+		const hash = selectionHash(projectId, serviceId);
+
+		if (window.location.hash === hash) {
+			return;
+		}
+
+		window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash}`);
+	}
 
 	$effect(() => {
 		if (!visibleProjects.length) {
@@ -235,10 +348,66 @@
 		}
 
 		const exists = visibleProjects.some((project) => project.id === selectedProjectId);
+		const hashProjectExists = pendingHashSelection?.projectId
+			? visibleProjects.some((project) => project.id === pendingHashSelection?.projectId)
+			: false;
+
+		if (hashProjectExists) {
+			return;
+		}
 
 		if (!selectedProjectId || !exists) {
 			selectProject(visibleProjects[0].id);
 		}
+	});
+
+	$effect(() => {
+		const target = pendingHashSelection;
+
+		if (!target) {
+			return;
+		}
+
+		const project = visibleProjects.find((entry) => entry.id === target.projectId);
+
+		if (!project) {
+			return;
+		}
+
+		if (selectedProjectId !== target.projectId) {
+			selectProject(target.projectId);
+			return;
+		}
+
+		if (!target.serviceId) {
+			pendingHashSelection = null;
+			return;
+		}
+
+		if (!selectedProjectServicesQuery.isReady) {
+			return;
+		}
+
+		const service = selectedServices.find((entry) => entry.id === target.serviceId);
+
+		if (service) {
+			setProjectExpanded(target.projectId, true);
+
+			if (selectedContainerId !== target.serviceId) {
+				selectContainer(target.projectId, target.serviceId);
+				return;
+			}
+		}
+
+		pendingHashSelection = null;
+	});
+
+	$effect(() => {
+		if (pendingHashSelection || !selectedProjectId) {
+			return;
+		}
+
+		writeSelectionHash(selectedProjectId, selectedContainerId);
 	});
 
 	$effect(() => {
@@ -362,10 +531,18 @@
 			return 'building';
 		}
 
+		if (build.kind === 'watch' && build.status === 'succeeded') {
+			return 'watching';
+		}
+
 		return build.status === 'succeeded' ? 'succeeded' : 'failed';
 	}
 
 	function buildRowTitle(build: ComposeBuild) {
+		if (build.kind === 'watch') {
+			return `${build.targetName || build.projectName} watch`;
+		}
+
 		return build.projectName ? `${build.projectName} build #${build.id}` : `Build #${build.id}`;
 	}
 
@@ -384,12 +561,86 @@
 		return buildStreamEntries.filter((entry) => entry.buildId === buildId);
 	}
 
-	function composeFilePaths(project: ComposeProject | undefined) {
-		if (!project?.path) {
+	function serviceLogKey(projectId: string, serviceId: string) {
+		return `${projectId}:${serviceId}`;
+	}
+
+	function serviceLogsFor(project: ComposeProject, service: ComposeService) {
+		return serviceLogEntries[serviceLogKey(project.id, service.id)] ?? [];
+	}
+
+	function serviceLogOpen(project: ComposeProject, service: ComposeService) {
+		return serviceLogPanels[serviceLogKey(project.id, service.id)] ?? false;
+	}
+
+	function serviceLogErrorCount(project: ComposeProject, service: ComposeService) {
+		return serviceLogsFor(project, service).filter((entry) => entry.isError).length;
+	}
+
+	function clearServiceLogs(project: ComposeProject, service: ComposeService) {
+		serviceLogEntries = {
+			...serviceLogEntries,
+			[serviceLogKey(project.id, service.id)]: []
+		};
+	}
+
+	function clearActiveServiceLogs() {
+		if (!selectedProject) {
+			return;
+		}
+
+		const openSelectedService =
+			selectedContainer && serviceLogOpen(selectedProject, selectedContainer) ? selectedContainer : undefined;
+		const openService =
+			openSelectedService ?? selectedServices.find((service) => serviceLogOpen(selectedProject, service));
+
+		if (openService) {
+			clearServiceLogs(selectedProject, openService);
+		}
+	}
+
+	function handleGlobalKeydown(event: KeyboardEvent) {
+		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+			event.preventDefault();
+			clearActiveServiceLogs();
+		}
+	}
+
+	function processPanelOpen(entryId: string) {
+		return processPanels[entryId] ?? false;
+	}
+
+	function toggleProcessPanel(entryId: string) {
+		processPanels = {
+			...processPanels,
+			[entryId]: !processPanelOpen(entryId)
+		};
+	}
+
+	function splitComposePath(path: string | undefined) {
+		if (!path) {
 			return [];
 		}
 
-		return [...new Set(project.path.split(',').map((entry) => entry.trim()).filter(Boolean))];
+		return [...new Set(path.split(',').map((entry) => entry.trim()).filter(Boolean))];
+	}
+
+	function composeFilePaths(project: ComposeProject | undefined) {
+		return splitComposePath(project?.path);
+	}
+
+	function actionComposePaths(project: ComposeProject, service?: ComposeService) {
+		const paths = splitComposePath(service?.composePath || project.path);
+
+		if (service) {
+			return paths.slice(0, 1);
+		}
+
+		return paths;
+	}
+
+	function actionTarget(project: ComposeProject, path: string) {
+		return { id: project.id, path };
 	}
 
 	function composeFileKey(projectId: string, filePath: string) {
@@ -481,7 +732,15 @@
 	}
 
 	function activeBuildTarget(projectId: string) {
-		for (const target of Object.values(activeBuildTargets)) {
+		const current = currentBuilds();
+
+		for (const [buildId, target] of Object.entries(activeBuildTargets)) {
+			const build = current.find((entry) => entry.id === buildId);
+
+			if (!build || build.status !== 'running') {
+				continue;
+			}
+
 			if (target.projectId === projectId) {
 				return target;
 			}
@@ -490,24 +749,32 @@
 		return null;
 	}
 
+	function busyActionKindForProject(projectId: string) {
+		for (const kind of ['stop', 'start', 'up-no-build', 'restart', 'watching', 'remove']) {
+			if (busyAction?.startsWith(`${kind}:${projectId}:`)) {
+				return kind;
+			}
+		}
+
+		return '';
+	}
+
 	function projectStartButtonSpinning(project: ComposeProject) {
 		const target = activeBuildTarget(project.id);
-		return (
-			Boolean(target && !target.serviceId) ||
-			busyAction === `start:${project.id}:project` ||
-			busyAction === `up-no-build:${project.id}:project` ||
-			busyAction === `restart:${project.id}:project` ||
-			busyAction === `watching:${project.id}`
-		);
+		return Boolean(target) || Boolean(busyActionKindForProject(project.id));
 	}
 
 	function projectPendingStatusLabel(project: ComposeProject) {
-		if (busyAction === `watching:${project.id}`) {
+		if (busyAction === `watching:${project.id}:project`) {
 			return project.watching ? 'stopping watch' : 'enabling watch';
 		}
 
 		if (busyAction === `restart:${project.id}:project`) {
 			return 'restarting';
+		}
+
+		if (busyAction === `stop:${project.id}:project`) {
+			return 'stopping';
 		}
 
 		if (
@@ -519,8 +786,26 @@
 
 		const target = activeBuildTarget(project.id);
 
-		if (target && !target.serviceId) {
+		if (target) {
 			return 'building';
+		}
+
+		const busyKind = busyActionKindForProject(project.id);
+
+		if (busyKind === 'restart') {
+			return 'restarting';
+		}
+
+		if (busyKind === 'stop') {
+			return 'stopping';
+		}
+
+		if (busyKind === 'remove') {
+			return 'removing';
+		}
+
+		if (busyKind === 'start' || busyKind === 'up-no-build' || busyKind === 'watching') {
+			return 'starting';
 		}
 
 		return '';
@@ -546,9 +831,12 @@
 		const target = activeBuildTarget(project.id);
 		return (
 			Boolean(target && target.serviceId === service.id) ||
+			busyAction === `stop:${project.id}:${service.id}` ||
 			busyAction === `start:${project.id}:${service.id}` ||
 			busyAction === `up-no-build:${project.id}:${service.id}` ||
-			busyAction === `restart:${project.id}:${service.id}`
+			busyAction === `restart:${project.id}:${service.id}` ||
+			busyAction === `watching:${project.id}:${service.id}` ||
+			busyAction === `remove:${project.id}:${service.id}`
 		);
 	}
 
@@ -561,9 +849,18 @@
 			return 'restarting';
 		}
 
+		if (busyAction === `stop:${project.id}:${service.id}`) {
+			return 'stopping';
+		}
+
+		if (busyAction === `remove:${project.id}:${service.id}`) {
+			return 'removing';
+		}
+
 		if (
 			busyAction === `start:${project.id}:${service.id}` ||
-			busyAction === `up-no-build:${project.id}:${service.id}`
+			busyAction === `up-no-build:${project.id}:${service.id}` ||
+			busyAction === `watching:${project.id}:${service.id}`
 		) {
 			return 'starting';
 		}
@@ -589,38 +886,503 @@
 		return servicePendingStatusLabel(project, service) ? 'state-chip-mixed' : serviceStateChipClass(service);
 	}
 
+	function currentBuilds() {
+		return [...buildsCollection.state.values()] as ComposeBuild[];
+	}
+
+	function upsertLocalBuild(build: ComposeBuild) {
+		hydrateBuilds([...currentBuilds().filter((entry) => entry.id !== build.id), build]);
+	}
+
+	function currentWatchBuild(projectId: string) {
+		const buildId = watchBuildIds.get(projectId);
+		return buildId ? currentBuilds().find((build) => build.id === buildId) : undefined;
+	}
+
+	function setBuildStatus(buildId: string, status: 'running' | 'succeeded' | 'failed') {
+		const nextBuilds = currentBuilds().map((build) =>
+			build.id === buildId
+				? {
+						...build,
+						status,
+						finishedAt: status === 'running' ? null : new Date().toISOString(),
+						success: status === 'running' ? null : status === 'succeeded'
+					}
+				: build
+		);
+
+		hydrateBuilds(nextBuilds);
+
+		if (status !== 'running') {
+			setActiveBuildTarget(buildId, null);
+		}
+	}
+
+	function clearActiveTargets(projectId: string, serviceId?: string) {
+		for (const [buildId, target] of Object.entries(activeBuildTargets)) {
+			if (target.projectId !== projectId) {
+				continue;
+			}
+
+			if (serviceId && target.serviceId !== serviceId) {
+				continue;
+			}
+
+			setBuildStatus(buildId, 'succeeded');
+		}
+	}
+
+	function ensureWatchBuild(project: Pick<ComposeProject, 'id' | 'name'>, service?: ComposeService) {
+		const existing = currentWatchBuild(project.id);
+		const target = {
+			projectId: project.id,
+			...(service ? { serviceId: service.id } : {})
+		};
+
+		watchBuildTargets.set(project.id, target);
+
+		if (existing) {
+			const nextBuild = {
+				...existing,
+				status: 'running' as const,
+				finishedAt: null,
+				success: null,
+				targetName: service?.serviceName ?? existing.targetName ?? project.name
+			};
+			upsertLocalBuild(nextBuild);
+			setActiveBuildTarget(existing.id, target);
+			return nextBuild;
+		}
+
+		const build: ComposeBuild = {
+			id: `watch-${project.id}-${Date.now()}-${crypto.randomUUID()}`,
+			projectId: project.id,
+			projectName: project.name,
+			kind: 'watch',
+			targetName: service?.serviceName ?? project.name,
+			status: 'running',
+			startedAt: new Date().toISOString(),
+			finishedAt: null,
+			success: null,
+			streamUrl: ''
+		};
+
+		upsertLocalBuild(build);
+		watchBuildIds.set(project.id, build.id);
+		setActiveBuildTarget(build.id, {
+			projectId: project.id,
+			...(service ? { serviceId: service.id } : {})
+		});
+
+		return build;
+	}
+
+	function appendBuildStreamEntry(
+		buildId: string,
+		projectId: string,
+		payload: {
+			stream?: string;
+			source?: string;
+			message?: string;
+			time?: string;
+		},
+		fallbackSource: string
+	) {
+		const message = String(payload.message ?? '').trim();
+
+		if (!message) {
+			return;
+		}
+
+		buildStreamEntries = [
+			...buildStreamEntries,
+			{
+				id: `${buildId}-${Date.now()}-${crypto.randomUUID()}`,
+				buildId,
+				projectId,
+				time: formatBuildTime(String(payload.time ?? '')) || formatBuildTime(new Date().toISOString()),
+				source: String(payload.source ?? '').trim() || fallbackSource,
+				stream: String(payload.stream ?? ''),
+				message
+			}
+		];
+	}
+
+	function isErrorLogLine(stream: string, message: string) {
+		return stream.toLowerCase() === 'stderr' || /\b(error|failed|exception|panic|fatal)\b/i.test(message);
+	}
+
+	function parseExecCompletionMessage(message: string) {
+		const match = /^exec\s+([a-f0-9]+)\s+exited with code\s+(-?\d+)$/i.exec(message.trim());
+
+		if (!match) {
+			return null;
+		}
+
+		return {
+			execId: match[1],
+			code: Number(match[2])
+		};
+	}
+
+	function parseExecStartMessage(message: string) {
+		const match = /^exec\s+([a-f0-9]+)\s+started(?::.*)?$/i.exec(message.trim());
+		return match ? { execId: match[1] } : null;
+	}
+
+	function appendServiceLogEntry(project: ComposeProject, service: ComposeService, entry: Omit<ServiceLogEntry, 'id' | 'projectId' | 'serviceId'>) {
+		const key = serviceLogKey(project.id, service.id);
+		const id = `${key}-${Date.now()}-${crypto.randomUUID()}`;
+
+		serviceLogEntries = {
+			...serviceLogEntries,
+			[key]: [
+				...(serviceLogEntries[key] ?? []),
+				{
+					...entry,
+					id,
+					projectId: project.id,
+					serviceId: service.id
+				}
+			].slice(-500)
+		};
+
+		return id;
+	}
+
+	function latestRunningCommandEntryId(project: ComposeProject, service: ComposeService) {
+		const key = serviceLogKey(project.id, service.id);
+		const entries = serviceLogEntries[key] ?? [];
+
+		for (let index = entries.length - 1; index >= 0; index -= 1) {
+			const entry = entries[index];
+
+			if (entry.isCommand && entry.commandStatus === 'running') {
+				return entry.id;
+			}
+		}
+
+		return '';
+	}
+
+	function markServiceCommandEntry(
+		project: ComposeProject,
+		service: ComposeService,
+		status: 'running' | 'succeeded' | 'failed',
+		options: { entryId?: string; execId?: string } = {}
+	) {
+		const key = serviceLogKey(project.id, service.id);
+		const entries = serviceLogEntries[key] ?? [];
+		let targetIndex = -1;
+
+		for (let index = entries.length - 1; index >= 0; index -= 1) {
+			const entry = entries[index];
+
+			if (
+				(options.entryId && entry.id === options.entryId) ||
+				(options.execId && entry.execId === options.execId) ||
+				(!options.entryId && !options.execId && entry.isCommand && entry.commandStatus === 'running')
+			) {
+				targetIndex = index;
+				break;
+			}
+		}
+
+		if (targetIndex < 0) {
+			return false;
+		}
+
+		serviceLogEntries = {
+			...serviceLogEntries,
+			[key]: entries.map((entry, index) =>
+				index === targetIndex
+					? {
+							...entry,
+							commandStatus: status,
+							execId: options.execId ?? entry.execId,
+							isError: status === 'failed' || entry.isError
+						}
+					: entry
+			)
+		};
+
+		return true;
+	}
+
+	function trackExecCommand(project: ComposeProject, service: ComposeService, execId: string, entryId = latestRunningCommandEntryId(project, service)) {
+		if (!entryId) {
+			return false;
+		}
+
+		execCommandLogEntries.set(execId, {
+			key: serviceLogKey(project.id, service.id),
+			entryId
+		});
+		return markServiceCommandEntry(project, service, 'running', { entryId, execId });
+	}
+
+	function closeServiceLogStream(key: string) {
+		const source = serviceLogEventSources.get(key);
+
+		if (source) {
+			source.close();
+			serviceLogEventSources.delete(key);
+		}
+	}
+
+	function subscribeToServiceLogs(project: ComposeProject, service: ComposeService) {
+		if (!uiState) {
+			return;
+		}
+
+		const key = serviceLogKey(project.id, service.id);
+
+		if (serviceLogEventSources.has(key)) {
+			return;
+		}
+
+		const concretePath = actionComposePaths(project, service)[0] || service.composePath || project.path;
+		const streamUrl = composeLogsStreamUrl(uiState, project.name || project.id, {
+			path: concretePath,
+			services: [service.serviceName],
+			follow: true,
+			tail: '200'
+		});
+		const source = new EventSource(streamUrl);
+		serviceLogEventSources.set(key, source);
+
+		source.addEventListener('message', (event) => {
+			try {
+				const payload = JSON.parse((event as MessageEvent).data) as {
+					project?: string;
+					stream?: string;
+					source?: string;
+					message?: string;
+					time?: string;
+				};
+				const message = String(payload.message ?? '').trim();
+
+				if (!message) {
+					return;
+				}
+
+				const execStart = parseExecStartMessage(message);
+
+				if (execStart) {
+					trackExecCommand(project, service, execStart.execId);
+					return;
+				}
+
+				const execCompletion = parseExecCompletionMessage(message);
+
+				if (execCompletion) {
+					const status = execCompletion.code === 0 ? 'succeeded' : 'failed';
+					const trackedEntry = execCommandLogEntries.get(execCompletion.execId);
+
+					if (trackedEntry) {
+						markServiceCommandEntry(project, service, status, {
+							entryId: trackedEntry.entryId,
+							execId: execCompletion.execId
+						});
+					} else if (trackExecCommand(project, service, execCompletion.execId)) {
+						markServiceCommandEntry(project, service, status, {
+							execId: execCompletion.execId
+						});
+					} else {
+						pendingExecCompletions.set(execCompletion.execId, execCompletion.code);
+					}
+
+					return;
+				}
+
+				const stream = String(payload.stream ?? '').trim();
+				appendServiceLogEntry(project, service, {
+					time: formatBuildTime(String(payload.time ?? '')) || formatBuildTime(new Date().toISOString()),
+					source: String(payload.source ?? '').trim() || service.containerName || service.serviceName,
+					stream,
+					message,
+					isError: isErrorLogLine(stream, message)
+				});
+			} catch {
+				// Ignore malformed log messages.
+			}
+		});
+
+		source.onerror = () => {
+			// Let EventSource retry; closing would hide transient reconnects.
+		};
+	}
+
+	function toggleServiceLogs(project: ComposeProject, service: ComposeService) {
+		const key = serviceLogKey(project.id, service.id);
+		const nextOpen = !serviceLogOpen(project, service);
+
+		serviceLogPanels = {
+			...serviceLogPanels,
+			[key]: nextOpen
+		};
+
+		if (nextOpen) {
+			subscribeToServiceLogs(project, service);
+		} else {
+			closeServiceLogStream(key);
+		}
+	}
+
+	function serviceCommandValue(project: ComposeProject, service: ComposeService) {
+		return serviceCommandInputs[serviceLogKey(project.id, service.id)] ?? '';
+	}
+
+	function setServiceCommandValue(project: ComposeProject, service: ComposeService, value: string) {
+		serviceCommandInputs = {
+			...serviceCommandInputs,
+			[serviceLogKey(project.id, service.id)]: value
+		};
+	}
+
+	async function runServiceCommand(project: ComposeProject, service: ComposeService) {
+		if (!uiState) {
+			return;
+		}
+
+		const key = serviceLogKey(project.id, service.id);
+		const shell = serviceCommandValue(project, service).trim();
+
+		if (!shell || serviceCommandBusy[key]) {
+			return;
+		}
+
+		serviceCommandBusy = { ...serviceCommandBusy, [key]: true };
+		subscribeToServiceLogs(project, service);
+		const commandLogId = appendServiceLogEntry(project, service, {
+			time: formatBuildTime(new Date().toISOString()),
+			source: 'exec',
+			stream: 'command',
+			message: `$ ${shell}`,
+			isError: false,
+			isCommand: true,
+			commandStatus: 'running'
+		});
+
+		try {
+			const result = await executeProjectCommand(uiState, project, {
+				path: actionComposePaths(project, service)[0] || service.composePath || project.path,
+				service: service.serviceName,
+				container: service.containerName,
+				shell,
+				shellExecutable: '/bin/bash',
+				startStopped: true,
+				tty: false
+			});
+			const execId = typeof result.execId === 'string' ? result.execId : '';
+
+			if (execId) {
+				trackExecCommand(project, service, execId, commandLogId);
+
+				const completionCode = pendingExecCompletions.get(execId);
+
+				if (typeof completionCode === 'number') {
+					markServiceCommandEntry(project, service, completionCode === 0 ? 'succeeded' : 'failed', {
+						entryId: commandLogId,
+						execId
+					});
+					pendingExecCompletions.delete(execId);
+				}
+			}
+
+			setServiceCommandValue(project, service, '');
+		} catch (error) {
+			const message = errorMessage(error, `Failed to execute command in ${service.serviceName}.`);
+			markServiceCommandEntry(project, service, 'failed', { entryId: commandLogId });
+			reportActionError(project, 'Command failed', message);
+		} finally {
+			serviceCommandBusy = { ...serviceCommandBusy, [key]: false };
+		}
+	}
+
+	function setWatchBuildStatus(
+		projectId: string,
+		status: 'running' | 'succeeded' | 'failed',
+		options?: { clear?: boolean }
+	) {
+		const buildId = watchBuildIds.get(projectId);
+
+		if (!buildId) {
+			return;
+		}
+
+		if (status === 'running') {
+			setActiveBuildTarget(buildId, watchBuildTargets.get(projectId) ?? { projectId });
+		} else {
+			setActiveBuildTarget(buildId, null);
+		}
+
+		setBuildStatus(buildId, status);
+
+		if (options?.clear) {
+			watchBuildIds.delete(projectId);
+			watchBuildTargets.delete(projectId);
+		}
+	}
+
+	function projectWatchActive(project: ComposeProject) {
+		const watchBuild = currentWatchBuild(project.id);
+		return project.watching || watchEventSources.has(project.id) || watchBuild?.status === 'running';
+	}
+
+	function watchMessageStartsProgress(message: string) {
+		return /rebuilding service|building service|refreshing services/i.test(message);
+	}
+
+	function watchMessageFinishesProgress(message: string) {
+		return /service\(s\).*successfully built|has been recreated|ready\s+in\s+\d+|watch disabled|syncing service|hmr update/i.test(message);
+	}
+
+	function messageFailsProgress(message: string) {
+		return /\berror\b|failed|exited with code [1-9]\d*/i.test(message);
+	}
+
 	function registerStartedBuild(
 		project: ComposeProject,
 		startResult: { buildId?: string; buildUrl?: string; watching?: boolean; watchUrl?: string },
 		service?: ComposeService
 	) {
+		let build: ComposeBuild | null = null;
+
+		if (startResult.buildId && startResult.buildUrl) {
+			build = {
+				id: startResult.buildId,
+				projectId: project.id,
+				projectName: project.name,
+				kind: 'build',
+				targetName: service?.serviceName ?? project.name,
+				status: 'running',
+				startedAt: new Date().toISOString(),
+				finishedAt: null,
+				success: null,
+				streamUrl: startResult.buildUrl
+			};
+
+			upsertLocalBuild(build);
+			setActiveBuildTarget(startResult.buildId, {
+				projectId: project.id,
+				...(service ? { serviceId: service.id } : {})
+			});
+			subscribeToBuild(build);
+		}
+
 		if (startResult.watching || startResult.watchUrl) {
 			setProjectWatching(project.id, true);
-			subscribeToWatch(project, startResult.watchUrl);
+			if (build) {
+				watchBuildIds.set(project.id, build.id);
+				watchBuildTargets.set(project.id, {
+					projectId: project.id,
+					...(service ? { serviceId: service.id } : {})
+				});
+			}
+			const watchBuildId = build?.id ?? ensureWatchBuild(project, service).id;
+			subscribeToWatch(project, startResult.watchUrl, watchBuildId);
 		}
-
-		if (!startResult.buildId || !startResult.buildUrl) {
-			return;
-		}
-
-		const build: ComposeBuild = {
-			id: startResult.buildId,
-			projectId: project.id,
-			projectName: project.name,
-			status: 'running',
-			startedAt: new Date().toISOString(),
-			finishedAt: null,
-			success: null,
-			streamUrl: startResult.buildUrl
-		};
-
-		appendLog(project.id, 'info', `${buildRowTitle(build)} started.`);
-		hydrateBuilds([build]);
-		setActiveBuildTarget(startResult.buildId, {
-			projectId: project.id,
-			...(service ? { serviceId: service.id } : {})
-		});
-		subscribeToBuild(build);
 	}
 
 	async function refreshBuildState() {
@@ -630,10 +1392,19 @@
 
 		try {
 			const nextBuilds = await loadBuilds(uiState);
-			hydrateBuilds(nextBuilds);
+			const localWatchBuilds = builds.filter(
+				(build) => build.kind === 'watch' && watchBuildIds.get(build.projectId) === build.id
+			);
+			const nextBuildIds = new Set(nextBuilds.map((build) => build.id));
+			hydrateBuilds([
+				...nextBuilds,
+				...localWatchBuilds.filter((build) => !nextBuildIds.has(build.id))
+			]);
 
 			const runningIds = new Set(
-				nextBuilds.filter((build) => build.status === 'running').map((build) => build.id)
+				[...nextBuilds, ...localWatchBuilds]
+					.filter((build) => build.status === 'running')
+					.map((build) => build.id)
 			);
 
 			for (const buildId of Object.keys(activeBuildTargets)) {
@@ -688,25 +1459,14 @@
 					time?: string;
 				};
 				const projectId = String(payload.project ?? build.projectId).trim() || build.projectId;
-				const sourceLabel = String(payload.source ?? '').trim();
+				appendBuildStreamEntry(build.id, projectId, payload, 'Compose');
 				const message = String(payload.message ?? '').trim();
 
-				if (!message) {
-					return;
+				if (watchMessageFinishesProgress(message)) {
+					setBuildStatus(build.id, 'succeeded');
+				} else if (messageFailsProgress(message)) {
+					setBuildStatus(build.id, 'failed');
 				}
-
-				buildStreamEntries = [
-					...buildStreamEntries,
-					{
-						id: `${build.id}-${Date.now()}-${crypto.randomUUID()}`,
-						buildId: build.id,
-						projectId,
-						time: formatBuildTime(String(payload.time ?? '')) || formatBuildTime(new Date().toISOString()),
-						source: sourceLabel || 'Compose',
-						stream: String(payload.stream ?? ''),
-						message
-					}
-				];
 			} catch {
 				// Ignore malformed buffered messages.
 			}
@@ -740,9 +1500,15 @@
 			source.close();
 			watchEventSources.delete(projectId);
 		}
+
+		setWatchBuildStatus(projectId, 'succeeded', { clear: true });
 	}
 
-	function subscribeToWatch(project: Pick<ComposeProject, 'id' | 'name'>, watchUrl?: string) {
+	function subscribeToWatch(
+		project: Pick<ComposeProject, 'id' | 'name'>,
+		watchUrl?: string,
+		buildId?: string
+	) {
 		if (!uiState || watchEventSources.has(project.id)) {
 			return;
 		}
@@ -758,6 +1524,11 @@
 
 		const source = new EventSource(streamUrl);
 		watchEventSources.set(project.id, source);
+		const watchBuildId = buildId ?? ensureWatchBuild(project).id;
+
+		if (!buildId) {
+			setWatchBuildStatus(project.id, 'succeeded');
+		}
 
 		source.addEventListener('message', (event) => {
 			try {
@@ -770,15 +1541,23 @@
 				};
 				const payloadProject = String(payload.project ?? '').trim();
 				const projectId = !payloadProject || payloadProject === project.name ? project.id : payloadProject;
-				const sourceLabel = String(payload.source ?? '').trim() || 'Watch';
-				const stream = String(payload.stream ?? '').trim().toLowerCase();
 				const message = String(payload.message ?? '').trim();
 
 				if (!message) {
 					return;
 				}
 
-				appendLog(projectId, stream === 'stderr' ? 'error' : 'info', `${sourceLabel}: ${message}`);
+				appendBuildStreamEntry(watchBuildId, projectId, payload, 'Watch');
+
+				if (watchMessageStartsProgress(message)) {
+					setWatchBuildStatus(project.id, 'running');
+				}
+
+				if (watchMessageFinishesProgress(message)) {
+					setWatchBuildStatus(project.id, /watch disabled/i.test(message) ? 'succeeded' : 'succeeded', {
+						clear: /watch disabled/i.test(message)
+					});
+				}
 			} catch {
 				// Ignore malformed watch messages.
 			}
@@ -803,9 +1582,76 @@
 		}
 	}
 
+	async function refreshSystemResources() {
+		const ui = uiStateCollection.state.get('app');
+
+		if (!ui) {
+			return;
+		}
+
+		const [nextSystemInfo, nextDiskUsage] = await Promise.allSettled([
+			loadSystemInfo(ui),
+			loadSystemDiskUsage(ui)
+		]);
+
+		if (nextSystemInfo.status === 'fulfilled') {
+			systemInfo = nextSystemInfo.value;
+		}
+
+		if (nextDiskUsage.status === 'fulfilled') {
+			systemDiskUsage = nextDiskUsage.value;
+		}
+	}
+
+	async function refreshSelectedResources() {
+		const ui = uiStateCollection.state.get('app');
+		const project = selectedProject;
+
+		if (!ui || !project) {
+			projectResources = null;
+			return;
+		}
+
+		const service = selectedResourceService;
+		const actionPaths = service ? actionComposePaths(project, service) : composeFilePaths(project);
+		const path = actionPaths[0] || project.path;
+
+		const request = {
+			path,
+			...(service ? { services: [service.serviceName] } : {}),
+			all: true
+		};
+
+		try {
+			projectResources = await loadProjectResources(ui, project, {
+				...request,
+				granularity: 'all'
+			});
+		} catch {
+			try {
+				projectResources = await loadProjectResources(ui, project, {
+					...request,
+					granularity: service ? 'service' : 'project'
+				});
+			} catch {
+				if (!projectResources || (projectResources.project !== project.id && projectResources.project !== project.name)) {
+					projectResources = null;
+				}
+			}
+		}
+	}
+
 	onMount(() => {
+		const handleHashChange = () => {
+			pendingHashSelection = parseSelectionHash(window.location.hash);
+		};
+
+		handleHashChange();
 		void refresh();
 		void refreshBuildState();
+		void refreshSystemResources();
+		void refreshSelectedResources();
+		window.addEventListener('hashchange', handleHashChange);
 
 		const intervalId = window.setInterval(() => {
 			const currentUi = uiStateCollection.state.get('app');
@@ -815,9 +1661,12 @@
 			}
 
 			void refresh({ silent: true });
+			void refreshSystemResources();
+			void refreshSelectedResources();
 		}, LS_POLL_INTERVAL_MS);
 
 		return () => {
+			window.removeEventListener('hashchange', handleHashChange);
 			window.clearInterval(intervalId);
 			for (const source of buildEventSources.values()) {
 				source.close();
@@ -827,6 +1676,10 @@
 				source.close();
 			}
 			watchEventSources.clear();
+			for (const source of serviceLogEventSources.values()) {
+				source.close();
+			}
+			serviceLogEventSources.clear();
 		};
 	});
 
@@ -868,11 +1721,540 @@
 		};
 	});
 
+	$effect(() => {
+		selectedProjectId;
+		selectedContainerId;
+		serviceQueryEpoch;
+		void refreshSelectedResources();
+	});
+
 	const visibleProcessSnapshots = $derived(
 		selectedContainerId
 			? processSnapshots.filter((entry) => entry.id === selectedContainerId)
 			: processSnapshots
 	);
+	const selectedResourceService = $derived(selectedContainer);
+
+	function numberValue(...values: unknown[]) {
+		for (const value of values) {
+			if (value === null || value === undefined || value === '') {
+				continue;
+			}
+
+			const number = typeof value === 'number' ? value : Number(value);
+
+			if (Number.isFinite(number)) {
+				return number;
+			}
+		}
+
+		return undefined;
+	}
+
+	function parseByteString(value: unknown) {
+		if (typeof value === 'number') {
+			return Number.isFinite(value) ? value : undefined;
+		}
+
+		if (typeof value !== 'string') {
+			return undefined;
+		}
+
+		const match = value.trim().match(/^([\d.]+)\s*([kmgtp]?i?b?)?$/i);
+
+		if (!match) {
+			return numberValue(value);
+		}
+
+		const amount = Number(match[1]);
+
+		if (!Number.isFinite(amount)) {
+			return undefined;
+		}
+
+		const unit = (match[2] || 'b').toLowerCase();
+		const multipliers: Record<string, number> = {
+			b: 1,
+			k: 1024,
+			kb: 1024,
+			kib: 1024,
+			m: 1024 ** 2,
+			mb: 1024 ** 2,
+			mib: 1024 ** 2,
+			g: 1024 ** 3,
+			gb: 1024 ** 3,
+			gib: 1024 ** 3,
+			t: 1024 ** 4,
+			tb: 1024 ** 4,
+			tib: 1024 ** 4,
+			p: 1024 ** 5,
+			pb: 1024 ** 5,
+			pib: 1024 ** 5
+		};
+
+		return amount * (multipliers[unit] ?? 1);
+	}
+
+	function nestedValue(source: unknown, path: string) {
+		let cursor = source as Record<string, unknown> | undefined;
+
+		for (const part of path.split('.')) {
+			if (!cursor || typeof cursor !== 'object') {
+				return undefined;
+			}
+
+			cursor = cursor[part] as Record<string, unknown> | undefined;
+		}
+
+		return cursor as unknown;
+	}
+
+	function recordValue(source: unknown, path?: string) {
+		const value = path ? nestedValue(source, path) : source;
+		return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+	}
+
+	function recordCandidates(source: unknown, ...paths: string[]) {
+		const candidates = [recordValue(source), ...paths.map((path) => recordValue(source, path))];
+		const seen = new Set<Record<string, unknown>>();
+
+		return candidates.filter((candidate): candidate is Record<string, unknown> => {
+			if (!candidate || seen.has(candidate)) {
+				return false;
+			}
+
+			seen.add(candidate);
+			return true;
+		});
+	}
+
+	function nestedNumberFromCandidates(candidates: Record<string, unknown>[], ...paths: string[]) {
+		for (const candidate of candidates) {
+			const value = nestedNumber(candidate, ...paths);
+
+			if (value !== undefined) {
+				return value;
+			}
+		}
+
+		return undefined;
+	}
+
+	function nestedNumber(source: unknown, ...paths: string[]) {
+		for (const path of paths) {
+			const cursor = nestedValue(source, path);
+			const value = numberValue(cursor) ?? parseByteString(cursor);
+
+			if (value !== undefined) {
+				return value;
+			}
+		}
+
+		return undefined;
+	}
+
+	function formatPercent(value: number | undefined) {
+		return value === undefined ? '--' : `${Math.max(0, value).toFixed(value >= 10 ? 0 : 1)}%`;
+	}
+
+	function formatCores(value: number | undefined) {
+		if (value === undefined) {
+			return '--';
+		}
+
+		return `${Math.max(0, value).toFixed(value >= 10 ? 0 : 2)} cores`;
+	}
+
+	function formatBytes(value: number | undefined) {
+		if (value === undefined) {
+			return 'unknown';
+		}
+
+		const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+		let amount = Math.max(0, value);
+		let unit = 0;
+
+		while (amount >= 1024 && unit < units.length - 1) {
+			amount /= 1024;
+			unit += 1;
+		}
+
+		return `${amount.toFixed(amount >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+	}
+
+	function systemCpuCount() {
+		return nestedNumberFromCandidates(
+			recordCandidates(systemInfo, 'data', 'system', 'info', 'host'),
+			'NCPU',
+			'nCPU',
+			'cpuCount',
+			'cpus',
+			'CPUCount',
+			'cpu.count',
+			'host.cpuCount'
+		);
+	}
+
+	function systemMemoryBytes() {
+		return nestedNumberFromCandidates(
+			recordCandidates(systemInfo, 'data', 'system', 'info', 'host'),
+			'MemTotal',
+			'memTotal',
+			'memoryBytes',
+			'memoryTotalBytes',
+			'totalMemoryBytes',
+			'host.memoryBytes',
+			'host.memoryTotalBytes'
+		);
+	}
+
+	function dockerDiskUsedBytes() {
+		const candidates = recordCandidates(systemDiskUsage, 'data', 'df', 'diskUsage', 'usage');
+		const imagesSize = nestedNumberFromCandidates(candidates, 'LayersSize', 'layersSize');
+		const explicit = nestedNumberFromCandidates(
+			candidates,
+			'usedBytes',
+			'UsedBytes',
+			'totalUsageBytes',
+			'TotalUsageBytes',
+			'size',
+			'Size',
+			'usage.size',
+			'usage.usedBytes'
+		);
+
+		if (explicit !== undefined) {
+			return explicit;
+		}
+
+		const lists = [
+			...(imagesSize === undefined ? ['Images', 'images'] : []),
+			'Containers',
+			'containers',
+			'Volumes',
+			'volumes',
+			'BuildCache',
+			'buildCache'
+		];
+		let total = imagesSize ?? 0;
+
+		for (const key of lists) {
+			for (const candidate of candidates) {
+				const items = candidate[key];
+
+				if (!Array.isArray(items)) {
+					continue;
+				}
+
+				for (const item of items as Record<string, unknown>[]) {
+					total +=
+						numberValue(
+							item.Size,
+							item.size,
+							item.SizeRootFs,
+							item.sizeRootFs,
+							item.Reclaimable,
+							item.reclaimable,
+							(item.UsageData as Record<string, unknown> | undefined)?.Size,
+							(item.usageData as Record<string, unknown> | undefined)?.size
+						) ??
+						parseByteString(item.Size) ??
+						parseByteString(item.size) ??
+						parseByteString(item.SizeRootFs) ??
+						parseByteString(item.sizeRootFs) ??
+						parseByteString(item.Reclaimable) ??
+						parseByteString(item.reclaimable) ??
+						0;
+				}
+			}
+		}
+
+		return total || undefined;
+	}
+
+	function systemDiskTotalBytes() {
+		const diskCandidates = recordCandidates(systemDiskUsage, 'data', 'df', 'diskUsage', 'usage');
+		const systemCandidates = recordCandidates(systemInfo, 'data', 'system', 'info', 'host');
+		const direct = nestedNumberFromCandidates(
+			diskCandidates,
+			'totalBytes',
+			'TotalBytes',
+			'diskTotalBytes',
+			'DockerRootDirTotalBytes',
+			'rootDirTotalBytes',
+			'usage.totalBytes',
+			'rootDir.totalBytes',
+			'rootDir.size',
+			'RootDirTotalBytes'
+		) ?? nestedNumberFromCandidates(
+			systemCandidates,
+			'totalBytes',
+			'TotalBytes',
+			'diskTotalBytes',
+			'DockerRootDirTotalBytes',
+			'rootDirTotalBytes',
+			'usage.totalBytes',
+			'rootDir.totalBytes',
+			'rootDir.size',
+			'RootDirTotalBytes'
+		);
+
+		if (direct !== undefined) {
+			return direct;
+		}
+
+		const driverStatus = systemInfo?.DriverStatus ?? systemInfo?.driverStatus;
+
+		if (Array.isArray(driverStatus)) {
+			for (const entry of driverStatus) {
+				if (!Array.isArray(entry) || entry.length < 2) {
+					continue;
+				}
+
+				if (String(entry[0]).toLowerCase().includes('total')) {
+					const value = parseByteString(entry[1]);
+
+					if (value !== undefined) {
+						return value;
+					}
+				}
+			}
+		}
+
+		return undefined;
+	}
+
+	function usageCpuPercent(usage: ResourceUsage | undefined, utilization: ResourceUtilization | undefined, limits: ResourceLimits | undefined) {
+		if (utilization?.cpuLimitPercent !== undefined) {
+			return utilization.cpuLimitPercent;
+		}
+
+		const raw = usage?.cpuPercent;
+		const limitedCores = limits?.cpuCores;
+
+		if (raw === undefined) {
+			return undefined;
+		}
+
+		if (limitedCores && limitedCores > 0) {
+			return raw / limitedCores;
+		}
+
+		const cpus = systemCpuCount();
+		return cpus && cpus > 0 ? raw / cpus : raw;
+	}
+
+	function usageMemoryPercent(usage: ResourceUsage | undefined, utilization: ResourceUtilization | undefined, limits: ResourceLimits | undefined) {
+		if (utilization?.memoryLimitPercent !== undefined) {
+			return utilization.memoryLimitPercent;
+		}
+
+		if (usage?.memoryPercent !== undefined) {
+			return usage.memoryPercent;
+		}
+
+		const used = usage?.memoryBytes;
+		const limit = limits?.memoryBytes || usage?.memoryLimitBytes || systemMemoryBytes();
+		return used !== undefined && limit ? (used / limit) * 100 : undefined;
+	}
+
+	function usageDiskPercent(usage: ResourceUsage | undefined) {
+		const used = (usage?.blockReadBytes ?? 0) + (usage?.blockWriteBytes ?? 0);
+		const total = systemDiskTotalBytes();
+		return used && total ? (used / total) * 100 : undefined;
+	}
+
+	function usageHasNumbers(usage: ResourceUsage | undefined) {
+		return Boolean(usage && Object.values(usage).some((value) => typeof value === 'number' && Number.isFinite(value)));
+	}
+
+	function aggregateResourceUsage(entries: Array<{ usage?: ResourceUsage }> | undefined) {
+		if (!entries?.length) {
+			return undefined;
+		}
+
+		const totals: ResourceUsage = {};
+		let seen = false;
+		const keys: Array<keyof ResourceUsage> = [
+			'cpuPercent',
+			'memoryBytes',
+			'memoryLimitBytes',
+			'networkRxBytes',
+			'networkTxBytes',
+			'blockReadBytes',
+			'blockWriteBytes',
+			'pidsCurrent'
+		];
+
+		for (const entry of entries) {
+			for (const key of keys) {
+				const value = entry.usage?.[key];
+
+				if (typeof value === 'number' && Number.isFinite(value)) {
+					totals[key] = (totals[key] ?? 0) + value;
+					seen = true;
+				}
+			}
+		}
+
+		return seen ? totals : undefined;
+	}
+
+	function aggregateResourceLimits(entries: Array<{ limits?: ResourceLimits }> | undefined) {
+		if (!entries?.length) {
+			return undefined;
+		}
+
+		const totals: Record<string, number> = {};
+		let seen = false;
+		const keys = [
+			'memoryBytes',
+			'memoryReservationBytes',
+			'memorySwapBytes',
+			'nanoCpus',
+			'cpuCores',
+			'pidsLimit'
+		] as const;
+
+		for (const entry of entries) {
+			for (const key of keys) {
+				const value = entry.limits?.[key];
+
+				if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+					totals[key] = (totals[key] ?? 0) + value;
+					seen = true;
+				}
+			}
+		}
+
+		return seen ? (totals as ResourceLimits) : undefined;
+	}
+
+	function resourceMetrics(
+		usage: ResourceUsage | undefined,
+		limits: ResourceLimits | undefined,
+		utilization: ResourceUtilization | undefined,
+		scope: string
+	): ResourceMetric[] {
+		const cpu = usageCpuPercent(usage, utilization, limits);
+		const memory = usageMemoryPercent(usage, utilization, limits);
+		const disk = usageDiskPercent(usage);
+		const diskBytes = usage ? (usage.blockReadBytes ?? 0) + (usage.blockWriteBytes ?? 0) : undefined;
+		const cpuCores = usage?.cpuPercent !== undefined ? usage.cpuPercent / 100 : undefined;
+		const memoryLimit = limits?.memoryBytes || usage?.memoryLimitBytes || systemMemoryBytes();
+
+		return [
+			{
+				label: 'CPU',
+				value: formatPercent(cpu),
+				hoverValue: formatCores(cpuCores),
+				tooltip: `${scope} CPU\n${formatPercent(cpu)}\nRaw: ${formatPercent(usage?.cpuPercent)}\nLimit: ${limits?.cpuCores ? `${limits.cpuCores} cores` : `${systemCpuCount() ?? 'unknown'} host CPUs`}`
+			},
+			{
+				label: 'MEM',
+				value: memory === undefined && usage?.memoryBytes !== undefined ? formatBytes(usage.memoryBytes) : formatPercent(memory),
+				hoverValue: `${formatBytes(usage?.memoryBytes)} / ${formatBytes(memoryLimit)}`,
+				tooltip: `${scope} memory\n${formatBytes(usage?.memoryBytes)} / ${formatBytes(memoryLimit)}`
+			},
+			{
+				label: 'HD',
+				value: disk === undefined && diskBytes !== undefined ? formatBytes(diskBytes) : formatPercent(disk),
+				hoverValue: `${formatBytes(usage?.blockReadBytes)} R / ${formatBytes(usage?.blockWriteBytes)} W`,
+				tooltip: `${scope} disk I/O\nRead ${formatBytes(usage?.blockReadBytes)}\nWrite ${formatBytes(usage?.blockWriteBytes)}`
+			}
+		];
+	}
+
+	function systemMetrics(): ResourceMetric[] {
+		const systemCandidates = recordCandidates(systemInfo, 'data', 'system', 'info', 'host');
+		const cpu = nestedNumberFromCandidates(systemCandidates, 'cpuPercent', 'CPUPercent', 'usage.cpuPercent', 'host.cpuPercent');
+		const cpuCount = systemCpuCount();
+		const memoryUsed = nestedNumberFromCandidates(
+			systemCandidates,
+			'memoryUsedBytes',
+			'MemUsed',
+			'usage.memoryBytes',
+			'host.memoryUsedBytes'
+		);
+		const memoryTotal = systemMemoryBytes();
+		const diskUsed = dockerDiskUsedBytes();
+		const diskTotal = systemDiskTotalBytes();
+
+		return [
+			{
+				label: 'CPU',
+				value: cpu === undefined && cpuCount !== undefined ? String(cpuCount) : formatPercent(cpu),
+				hoverValue: cpuCount !== undefined ? `${cpuCount} CPU${cpuCount === 1 ? '' : 's'}` : formatPercent(cpu),
+				tooltip: `Docker host CPU\n${cpu === undefined ? 'Live CPU usage unavailable' : formatPercent(cpu)}\n${cpuCount ?? 'unknown'} CPUs`
+			},
+			{
+				label: 'MEM',
+				value:
+					memoryUsed !== undefined && memoryTotal
+						? formatPercent((memoryUsed / memoryTotal) * 100)
+						: formatBytes(memoryTotal),
+				hoverValue:
+					memoryUsed !== undefined && memoryTotal
+						? `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
+						: formatBytes(memoryTotal),
+				tooltip: `Docker host memory\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
+			},
+			{
+				label: 'HD',
+				value:
+					diskUsed !== undefined && diskTotal
+						? formatPercent((diskUsed / diskTotal) * 100)
+						: formatBytes(diskUsed ?? diskTotal),
+				hoverValue:
+					diskUsed !== undefined && diskTotal
+						? `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
+						: formatBytes(diskUsed ?? diskTotal),
+				tooltip: `Docker disk usage\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
+			}
+		];
+	}
+
+	function selectedResourceMetrics() {
+		if (!selectedProject) {
+			return [];
+		}
+
+		if (!projectResources) {
+			return resourceMetrics(undefined, undefined, undefined, selectedProject.name);
+		}
+
+		if (selectedResourceService) {
+			const container = projectResources.containers?.find(
+				(entry) =>
+					entry.id === selectedResourceService.id ||
+					entry.name === selectedResourceService.containerName ||
+					entry.service === selectedResourceService.serviceName
+			);
+			const service = projectResources.services?.find((entry) => entry.name === selectedResourceService.serviceName);
+			const usage = container?.usage ?? service?.usage;
+			const limits = container?.limits ?? service?.limits;
+			const utilization = container?.utilization ?? service?.utilization;
+
+			return resourceMetrics(usage, limits, utilization, selectedResourceService.serviceName);
+		}
+
+		const summaryUsage = projectResources.projectSummary?.usage;
+		const summaryLimits = projectResources.projectSummary?.limits;
+		const usage = usageHasNumbers(summaryUsage)
+			? summaryUsage
+			: aggregateResourceUsage(projectResources.containers) ?? aggregateResourceUsage(projectResources.services);
+		const limits =
+			summaryLimits ??
+			aggregateResourceLimits(projectResources.containers) ??
+			aggregateResourceLimits(projectResources.services);
+
+		return resourceMetrics(
+			usage,
+			limits,
+			projectResources.projectSummary?.utilization,
+			selectedProject.name
+		);
+	}
 
 	function splitShellWords(value: string) {
 		const tokens = value.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
@@ -927,6 +2309,52 @@
 		}
 
 		return parseCommand(process[commandIndex] ?? '');
+	}
+
+	function processPid(entry: ComposeProcessSnapshot, process: string[]) {
+		const pidIndex = entry.titles.findIndex((title) => title.toLowerCase() === 'pid');
+		const pid = pidIndex >= 0 ? Number(process[pidIndex]) : NaN;
+		return Number.isFinite(pid) && pid > 0 ? pid : undefined;
+	}
+
+	function serviceForProcess(entry: ComposeProcessSnapshot) {
+		return selectedServices.find(
+			(service) =>
+				service.id === entry.containerId ||
+				service.containerName === entry.containerName ||
+				service.serviceName === entry.serviceName
+		);
+	}
+
+	async function killProcess(project: ComposeProject | undefined, entry: ComposeProcessSnapshot, process: string[], hard: boolean) {
+		if (!project || !uiState) {
+			return;
+		}
+
+		const pid = processPid(entry, process);
+		const service = serviceForProcess(entry);
+
+		if (!pid) {
+			reportActionError(project, 'Kill failed', 'No PID column found for this process.');
+			return;
+		}
+
+		try {
+			await killProjectProcess(uiState, project, {
+				path: service ? actionComposePaths(project, service)[0] || service.composePath || project.path : project.path,
+				container: entry.containerId || entry.containerName,
+				service: service?.serviceName || entry.serviceName,
+				pid,
+				signal: hard ? 'SIGKILL' : 'SIGTERM',
+				hard
+			});
+			await loadProjectProcesses(uiState, { id: project.id }).then((entries) => {
+				processSnapshots = entries;
+			});
+			appendLog(project.id, 'ok', `${hard ? 'Hard killed' : 'Killed'} PID ${pid}.`);
+		} catch (error) {
+			reportActionError(project, hard ? 'Hard kill failed' : 'Kill failed', errorMessage(error, `Failed to kill PID ${pid}.`));
+		}
 	}
 
 	function isProjectFullyPaused(project: ComposeProject) {
@@ -1167,6 +2595,22 @@
 		return fallback;
 	}
 
+	function dismissToast(id: string) {
+		toasts = toasts.filter((toast) => toast.id !== id);
+	}
+
+	function showToast(level: Toast['level'], title: string, message: string) {
+		const id = `${Date.now()}:${toastSequence++}`;
+		toasts = [...toasts.slice(-3), { id, level, title, message }];
+		setTimeout(() => dismissToast(id), 8000);
+	}
+
+	function reportActionError(project: ComposeProject, title: string, message: string) {
+		setConnectionState('error', message);
+		appendLog(project.id, 'error', message);
+		showToast('error', title, message);
+	}
+
 	function wait(ms: number) {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
@@ -1239,9 +2683,6 @@
 				setConnectionState('connected', 'Connected and synchronized.');
 			}
 
-			if (!options?.silent && selectedProjectId) {
-				appendLog(selectedProjectId, 'ok', 'Refreshed project list.');
-			}
 		} catch (error) {
 			const message = errorMessage(error, 'Server unavailable');
 			setConnectionState('error', `Unavailable at http://127.0.0.1:8094. ${message}`);
@@ -1259,6 +2700,7 @@
 		logMessage: string,
 		options?: {
 			serviceNames?: string[];
+			serviceId?: string;
 			settleState?: 'running' | 'paused' | 'stopped';
 		}
 	) {
@@ -1272,6 +2714,7 @@
 			serviceQueryEpoch += 1;
 		}
 
+		clearActiveTargets(project.id, options?.serviceId);
 		appendLog(project.id, 'ok', logMessage);
 	}
 
@@ -1287,30 +2730,39 @@
 		busyAction = `${shouldStop ? 'stop' : 'start'}:${project.id}:${service?.id ?? 'project'}`;
 
 		try {
+			const actionPaths = actionComposePaths(project, service);
+			if (!actionPaths.length) {
+				throw new Error(`No compose file path available for ${service?.serviceName ?? project.name}.`);
+			}
+
 			if (shouldStop) {
-				await stopServices(uiState, project, serviceNames);
+				for (const path of actionPaths) {
+					await stopServices(uiState, actionTarget(project, path), serviceNames);
+				}
 				await syncAfterAction(project, `Stopped ${service?.serviceName ?? project.name}.`, {
 					serviceNames,
+					serviceId: service?.id,
 					settleState: 'stopped'
 				});
 				setConnectionState('connected', `Stopped ${service?.serviceName ?? project.name}.`);
 			} else if (service && service.state === 'uncreated') {
 				const startResult = await startProject(
 					uiState,
-					service.composePath ?? project.path,
+					actionPaths[0],
 					project.watching,
 					serviceNames
 				);
 				registerStartedBuild(project, startResult, service);
 				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up.`, {
 					serviceNames,
+					serviceId: service.id,
 					settleState: 'running'
 				});
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (service) {
 				const startResult = await startProject(
 					uiState,
-					service.composePath ?? project.path,
+					actionPaths[0],
 					project.watching,
 					serviceNames,
 					true
@@ -1318,19 +2770,24 @@
 				registerStartedBuild(project, startResult, service);
 				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up --build.`, {
 					serviceNames,
+					serviceId: service.id,
 					settleState: 'running'
 				});
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (project.state === 'uncreated') {
-				const startResult = await startProject(uiState, project.path, project.watching);
-				registerStartedBuild(project, startResult);
+				for (const path of actionPaths) {
+					const startResult = await startProject(uiState, path, project.watching);
+					registerStartedBuild(project, startResult);
+				}
 				await syncAfterAction(project, `Started ${project.name} via /up.`, {
 					settleState: 'running'
 				});
 				setConnectionState('connected', `Started ${project.name}.`);
 			} else {
-				const startResult = await startProject(uiState, project.path, project.watching, undefined, true);
-				registerStartedBuild(project, startResult);
+				for (const path of actionPaths) {
+					const startResult = await startProject(uiState, path, project.watching, undefined, true);
+					registerStartedBuild(project, startResult);
+				}
 				await syncAfterAction(project, `Started ${project.name} via /up --build.`, {
 					settleState: 'running'
 				});
@@ -1341,8 +2798,7 @@
 				error,
 				`Failed to ${shouldStop ? 'stop' : 'start'} ${service?.serviceName ?? project.name}.`
 			);
-			setConnectionState('error', message);
-			appendLog(project.id, 'error', message);
+			reportActionError(project, shouldStop ? 'Stop failed' : 'Start failed', message);
 		} finally {
 			busyAction = null;
 		}
@@ -1357,18 +2813,20 @@
 		busyAction = `up-no-build:${project.id}:${service?.id ?? 'project'}`;
 
 		try {
-			await startProject(
-				uiState,
-				service?.composePath ?? project.path,
-				project.watching,
-				serviceNames,
-				false
-			);
+			const actionPaths = actionComposePaths(project, service);
+			if (!actionPaths.length) {
+				throw new Error(`No compose file path available for ${service?.serviceName ?? project.name}.`);
+			}
+
+			for (const path of actionPaths) {
+				await startProject(uiState, path, project.watching, serviceNames, false);
+			}
 			await syncAfterAction(
 				project,
 				`Started ${service?.serviceName ?? project.name} without rebuilding.`,
 				{
 					serviceNames,
+					serviceId: service?.id,
 					settleState: 'running'
 				}
 			);
@@ -1381,8 +2839,7 @@
 				error,
 				`Failed to start ${service?.serviceName ?? project.name} without rebuilding.`
 			);
-			setConnectionState('error', message);
-			appendLog(project.id, 'error', message);
+			reportActionError(project, 'Start failed', message);
 		} finally {
 			busyAction = null;
 		}
@@ -1395,27 +2852,74 @@
 
 		const serviceNames = service ? [service.serviceName] : undefined;
 		const targetName = service?.serviceName ?? project.name;
+		const keepWatching = projectWatchActive(project);
 		busyAction = `restart:${project.id}:${service?.id ?? 'project'}`;
 
 		try {
-			const startResult = await startProject(
-				uiState,
-				service?.composePath ?? project.path,
-				project.watching,
+			const actionPaths = actionComposePaths(project, service);
+			if (!actionPaths.length) {
+				throw new Error(`No compose file path available for ${targetName}.`);
+			}
+
+			for (const path of actionPaths) {
+				const startResult = await startProject(
+					uiState,
+					path,
+					keepWatching,
+					serviceNames,
+					true
+				);
+				registerStartedBuild(project, startResult, service);
+			}
+			await syncAfterAction(project, `Recreated ${targetName} via /up ${keepWatching ? '--watch ' : ''}--build.`, {
 				serviceNames,
-				true,
-				{ forceRecreate: true }
-			);
-			registerStartedBuild(project, startResult, service);
-			await syncAfterAction(project, `Recreated ${targetName} via /up --build.`, {
-				serviceNames,
+				serviceId: service?.id,
 				settleState: 'running'
 			});
 			setConnectionState('connected', `Restarted ${targetName}.`);
 		} catch (error) {
 			const message = errorMessage(error, `Failed to restart ${targetName}.`);
-			setConnectionState('error', message);
-			appendLog(project.id, 'error', message);
+			reportActionError(project, 'Restart failed', message);
+		} finally {
+			busyAction = null;
+		}
+	}
+
+	async function handleRemove(project = selectedProject, service?: ComposeService) {
+		if (!project || !uiState || busyAction) {
+			return;
+		}
+
+		const targetName = service?.serviceName ?? project.name;
+		const confirmed = window.confirm(
+			`Remove ${service ? `service ${targetName}` : `project ${targetName}`} containers?`
+		);
+
+		if (!confirmed) {
+			return;
+		}
+
+		const serviceNames = service ? [service.serviceName] : undefined;
+		busyAction = `remove:${project.id}:${service?.id ?? 'project'}`;
+
+		try {
+			const actionPaths = actionComposePaths(project, service);
+			if (!actionPaths.length) {
+				throw new Error(`No compose file path available for ${targetName}.`);
+			}
+
+			for (const path of actionPaths) {
+				await removeServices(uiState, actionTarget(project, path), serviceNames);
+			}
+
+			await syncAfterAction(project, `Removed ${targetName}.`, {
+				serviceNames,
+				serviceId: service?.id
+			});
+			setConnectionState('connected', `Removed ${targetName}.`);
+		} catch (error) {
+			const message = errorMessage(error, `Failed to remove ${targetName}.`);
+			reportActionError(project, 'Remove failed', message);
 		} finally {
 			busyAction = null;
 		}
@@ -1431,8 +2935,15 @@
 		busyAction = `${isUnpause ? 'unpause' : 'pause'}:${project.id}:${service?.id ?? 'project'}`;
 
 		try {
+			const actionPaths = actionComposePaths(project, service);
+			if (!actionPaths.length) {
+				throw new Error(`No compose file path available for ${service?.serviceName ?? project.name}.`);
+			}
+
 			if (isUnpause) {
-				await unpauseServices(uiState, project, serviceNames);
+				for (const path of actionPaths) {
+					await unpauseServices(uiState, actionTarget(project, path), serviceNames);
+				}
 				await syncAfterAction(
 					project,
 					`Resumed ${service?.serviceName ?? project.name}.`,
@@ -1443,7 +2954,9 @@
 				);
 				setConnectionState('connected', `Resumed ${service?.serviceName ?? project.name}.`);
 			} else {
-				await pauseServices(uiState, project, serviceNames);
+				for (const path of actionPaths) {
+					await pauseServices(uiState, actionTarget(project, path), serviceNames);
+				}
 				await syncAfterAction(
 					project,
 					`Paused ${service?.serviceName ?? project.name}.`,
@@ -1459,45 +2972,60 @@
 				error,
 				`Failed to ${isUnpause ? 'resume' : 'pause'} ${service?.serviceName ?? project.name}.`
 			);
-			setConnectionState('error', message);
-			appendLog(project.id, 'error', message);
+			reportActionError(project, isUnpause ? 'Resume failed' : 'Pause failed', message);
 		} finally {
 			busyAction = null;
 		}
 	}
 
-	async function handleWatchingToggle(project = selectedProject) {
+	async function handleWatchingToggle(project = selectedProject, service?: ComposeService) {
 		if (!project || !uiState || busyAction) {
 			return;
 		}
 
 		const nextWatching = !project.watching;
-		busyAction = `watching:${project.id}`;
+		const serviceNames = service ? [service.serviceName] : undefined;
+		busyAction = `watching:${project.id}:${service?.id ?? 'project'}`;
 
 		try {
-			const startResult = await startProject(uiState, project.path, nextWatching, undefined, true);
+			const actionPaths = actionComposePaths(project, service);
+			if (!actionPaths.length) {
+				throw new Error(`No compose file path available for ${service?.serviceName ?? project.name}.`);
+			}
 
 			if (nextWatching) {
-				registerStartedBuild(project, startResult);
-				appendLog(project.id, 'ok', `Started ${project.name} with watch mode.`);
+				for (const path of actionPaths) {
+					const startResult = await startProject(uiState, path, nextWatching, serviceNames, true);
+					registerStartedBuild(project, startResult, service);
+				}
+				appendLog(project.id, 'ok', `Started ${service?.serviceName ?? project.name} with watch mode.`);
 			} else {
+				for (const path of actionPaths) {
+					await startProject(uiState, path, nextWatching, serviceNames, true);
+				}
 				closeWatchStream(project.id);
-				appendLog(project.id, 'info', `Started ${project.name} without watch mode.`);
+				appendLog(project.id, 'info', `Started ${service?.serviceName ?? project.name} without watch mode.`);
 			}
 
 			setProjectWatching(project.id, nextWatching);
 			await refresh({ silent: true });
+
+			if (nextWatching) {
+				await settleProjectServices(project.id, 'running', serviceNames);
+				setWatchBuildStatus(project.id, 'succeeded');
+			}
+
+			clearActiveTargets(project.id, service?.id);
 			setConnectionState(
 				'connected',
-				`${nextWatching ? 'Watching' : 'Stopped watching'} ${project.name}.`
+				`${nextWatching ? 'Watching' : 'Stopped watching'} ${service?.serviceName ?? project.name}.`
 			);
 		} catch (error) {
 			const message = errorMessage(
 				error,
-				`${nextWatching ? 'Failed to start watching' : 'Failed to stop watching'} ${project.name}.`
+				`${nextWatching ? 'Failed to start watching' : 'Failed to stop watching'} ${service?.serviceName ?? project.name}.`
 			);
-			setConnectionState('error', message);
-			appendLog(project.id, 'error', message);
+			reportActionError(project, nextWatching ? 'Watch failed' : 'Watch stop failed', message);
 		} finally {
 			busyAction = null;
 		}
@@ -1595,6 +3123,12 @@
 			});
 		}
 
+		items.push({
+			label: 'Remove',
+			action: () => void handleRemove(project),
+			danger: true
+		});
+
 		return items;
 	}
 
@@ -1644,14 +3178,14 @@
 		if (!project.watching) {
 			items.push({
 				label: 'Start watching',
-				action: () => void handleWatchingToggle(project)
+				action: () => void handleWatchingToggle(project, service)
 			});
 		}
 
 		if (project.watching) {
 			items.push({
 				label: 'Stop watching',
-				action: () => void handleWatchingToggle(project)
+				action: () => void handleWatchingToggle(project, service)
 			});
 		}
 
@@ -1661,6 +3195,12 @@
 				action: () => void handleStartWithoutRebuild(project, service)
 			});
 		}
+
+		items.push({
+			label: 'Remove',
+			action: () => void handleRemove(project, service),
+			danger: true
+		});
 
 		return items;
 	}
@@ -1704,6 +3244,8 @@
 	/>
 </svelte:head>
 
+<svelte:window onkeydown={handleGlobalKeydown} />
+
 <div class="workspace" style={`--sidebar-width:${sidebarWidth}px;`}>
 	<aside class="sidebar">
 		<div class="sidebar-controls">
@@ -1717,7 +3259,7 @@
 						})}
 					aria-label="Sort projects"
 				>
-					<option value="status">by status</option>
+					<option value="status">by status!</option>
 					<option value="name">by project name</option>
 					<option value="path">by compose path</option>
 				</select>
@@ -1836,7 +3378,11 @@
 											}}
 											disabled={busyAction !== null}
 										>
-											<Icon name={projectCanStop(project) ? 'stop' : 'play'} size={13} />
+											<Icon
+												name={busyAction === `stop:${project.id}:project` ? 'refresh' : projectCanStop(project) ? 'stop' : 'play'}
+												size={13}
+												spinning={busyAction === `stop:${project.id}:project`}
+											/>
 										</button>
 									</span>
 								{/if}
@@ -1900,9 +3446,9 @@
 										disabled={busyAction !== null}
 									>
 										<Icon
-											name={busyAction === `watching:${project.id}` ? 'refresh' : project.watching ? 'eye-off' : 'eye'}
+											name={busyAction === `watching:${project.id}:project` ? 'refresh' : project.watching ? 'eye-off' : 'eye'}
 											size={13}
-											spinning={busyAction === `watching:${project.id}`}
+											spinning={busyAction === `watching:${project.id}:project`}
 										/>
 									</button>
 								</span>
@@ -1944,6 +3490,30 @@
 		<header class="panel-header">
 			<div class="panel-heading">
 				<h2>{selectedProject?.name ?? 'Compose Projects'}</h2>
+			</div>
+			<div class="resource-strip" aria-label="Resource usage">
+				<div class="resource-group">
+					<span class="resource-group-label">Host</span>
+					{#each systemMetrics() as metric (`host-${metric.label}`)}
+						<span class="resource-chip" data-tooltip={metric.tooltip}>
+							<span>{metric.label}</span>
+							<strong class="metric-value-default">{metric.value}</strong>
+							<strong class="metric-value-hover">{metric.hoverValue}</strong>
+						</span>
+					{/each}
+				</div>
+				{#if selectedProject}
+					<div class="resource-group">
+						<span class="resource-group-label">{selectedResourceService ? 'Service' : 'Project'}</span>
+						{#each selectedResourceMetrics() as metric (`selected-${metric.label}`)}
+							<span class="resource-chip" data-tooltip={metric.tooltip}>
+								<span>{metric.label}</span>
+								<strong class="metric-value-default">{metric.value}</strong>
+								<strong class="metric-value-hover">{metric.hoverValue}</strong>
+							</span>
+						{/each}
+					</div>
+				{/if}
 			</div>
 			<button
 				class="status-line"
@@ -2022,24 +3592,115 @@
 						{/each}
 					</div>
 				{/if}
+			</section>
 
-				{#if selectedServices.length}
+			<section class="card container-card">
+				<div class="card-header card-header-compact">
+					<p class="eyebrow">Containers</p>
+				</div>
+
+				{#if selectedProject && selectedServices.length}
 					<div class="compact-list">
 						{#each selectedServices as service (service.id)}
-							<div class="compact-row">
-								<div>
-									<div class="row-title">{service.serviceName}</div>
-									<div class="row-subtitle">{service.containerName}</div>
-								</div>
-								<div class="row-tail">
-									<span class={`state-chip ${serviceDisplayChipClass(selectedProject, service)}`}>
-										{serviceDisplayStateLabel(selectedProject, service)}
-									</span>
-									<span>{serviceDisplayStatusText(selectedProject, service)}</span>
-									{#if service.health && !servicePendingStatusLabel(selectedProject, service)}
-										<span class="health-tag">({service.health})</span>
-									{/if}
-								</div>
+							<div class="service-log-item">
+								<button
+									class="compact-row service-log-button"
+									type="button"
+									aria-pressed={serviceLogOpen(selectedProject, service)}
+									onmousedown={(event) => {
+										if (!isPrimaryMouse(event)) return;
+										toggleServiceLogs(selectedProject, service);
+									}}
+								>
+									<div>
+										<div class="row-title">
+											<span class="config-chevron">
+												<Icon name="chevron" size={12} rotated={serviceLogOpen(selectedProject, service)} />
+											</span>
+											{service.serviceName}
+										</div>
+										<div class="row-subtitle">{service.containerName}</div>
+									</div>
+									<div class="row-tail">
+										{#if serviceLogErrorCount(selectedProject, service)}
+											<span class="state-chip state-chip-exited">
+												{serviceLogErrorCount(selectedProject, service)} errors
+											</span>
+										{/if}
+										<span class={`state-chip ${serviceDisplayChipClass(selectedProject, service)}`}>
+											{serviceDisplayStateLabel(selectedProject, service)}
+										</span>
+										<span>{serviceDisplayStatusText(selectedProject, service)}</span>
+										{#if service.health && !servicePendingStatusLabel(selectedProject, service)}
+											<span class="health-tag">({service.health})</span>
+										{/if}
+									</div>
+								</button>
+
+								{#if serviceLogOpen(selectedProject, service)}
+									{@const entries = serviceLogsFor(selectedProject, service)}
+									<div class="service-log-output">
+										{#if entries.length}
+											<div class="service-log-list">
+												{#each entries as entry (entry.id)}
+													<div
+														class:command-log-row={entry.isCommand}
+														class:error-log-row={entry.isError}
+														class="service-log-row"
+													>
+														<span class="log-time">{entry.time}</span>
+														<span class="build-stream-source">{entry.source}</span>
+														{#if entry.isCommand && entry.commandStatus && entry.commandStatus !== 'running'}
+															<span
+																class={`command-status command-status-${entry.commandStatus}`}
+																aria-label={entry.commandStatus === 'succeeded' ? 'Command succeeded' : 'Command failed'}
+															>
+																{entry.commandStatus === 'succeeded' ? '✓' : '!'}
+															</span>
+														{/if}
+														<span class="log-message">{entry.message}</span>
+													</div>
+												{/each}
+											</div>
+										{:else}
+											<div class="config-output-state">
+												Waiting for logs…
+											</div>
+										{/if}
+										<form
+											class="command-form"
+											onsubmit={(event) => {
+												event.preventDefault();
+												void runServiceCommand(selectedProject, service);
+											}}
+										>
+											<input
+												type="text"
+												value={serviceCommandValue(selectedProject, service)}
+												oninput={(event) =>
+													setServiceCommandValue(selectedProject, service, event.currentTarget.value)}
+												placeholder="Run shell command"
+												aria-label={`Run command in ${service.serviceName}`}
+											/>
+											<button
+												type="button"
+												disabled={!entries.length}
+												onmousedown={(event) => {
+													if (!isPrimaryMouse(event)) return;
+													clearServiceLogs(selectedProject, service);
+												}}
+											>
+												Clear
+											</button>
+											<button
+												type="submit"
+												disabled={!serviceCommandValue(selectedProject, service).trim() || serviceCommandBusy[serviceLogKey(selectedProject.id, service.id)]}
+											>
+												{serviceCommandBusy[serviceLogKey(selectedProject.id, service.id)] ? 'Starting' : 'Run'}
+											</button>
+										</form>
+									</div>
+								{/if}
 							</div>
 						{/each}
 					</div>
@@ -2065,47 +3726,91 @@
 					<div class="process-list">
 						{#each visibleProcessSnapshots as entry (entry.id)}
 							<div class="process-group">
-								<div class="process-heading">
+								<button
+									class="process-heading"
+									type="button"
+									aria-pressed={processPanelOpen(entry.id)}
+									onmousedown={(event) => {
+										if (!isPrimaryMouse(event)) return;
+										toggleProcessPanel(entry.id);
+									}}
+								>
 									<div class="tooltip-anchor" data-tooltip={entry.containerName}>
-										<div class="row-title">{entry.serviceName}</div>
-									</div>
-									{#if entry.replica}
-										<span class="process-replica">#{entry.replica}</span>
-									{/if}
-								</div>
-
-								<div class="process-cards">
-									{#each entry.processes as process, index (`${entry.id}-${index}`)}
-										{@const command = processCommand(entry, process)}
-										<div class="process-item">
-											{#if command}
-												<div class="command-card">
-													<div class="command-line">
-														<span class="command-name">{command.commandName}</span>
-														{#if command.argString}
-															<span class="command-inline-args">{command.argString}</span>
-														{/if}
-													</div>
-
-													{#if command.commandPath}
-														<div class="command-path" data-tooltip={command.commandPath}>
-															{command.commandPath}
-														</div>
-													{/if}
-												</div>
-											{/if}
-
-											<div class="process-meta">
-												{#each processFields(entry, process) as field}
-													<div class="process-meta-item">
-														<span class="process-meta-label">{field.label}</span>
-														<strong>{field.value}</strong>
-													</div>
-												{/each}
-											</div>
+										<div class="row-title">
+											<span class="config-chevron">
+												<Icon name="chevron" size={12} rotated={processPanelOpen(entry.id)} />
+											</span>
+											{entry.serviceName}
 										</div>
-									{/each}
-								</div>
+									</div>
+									<div class="row-tail">
+										<span class="process-replica">
+											{entry.processes.length} {entry.processes.length === 1 ? 'process' : 'processes'}
+										</span>
+										{#if entry.replica}
+											<span class="process-replica">#{entry.replica}</span>
+										{/if}
+									</div>
+								</button>
+
+								{#if processPanelOpen(entry.id)}
+									<div class="process-cards">
+										{#each entry.processes as process, index (`${entry.id}-${index}`)}
+											{@const command = processCommand(entry, process)}
+											<div class="process-item">
+												{#if command}
+													<div class="command-card">
+														<div class="command-line">
+															<span class="command-name">{command.commandName}</span>
+															{#if command.argString}
+																<span class="command-inline-args">{command.argString}</span>
+															{/if}
+														</div>
+
+														<div class="process-actions">
+															{#if command.commandPath}
+																<div class="command-path" data-tooltip={command.commandPath}>
+																	{command.commandPath}
+																</div>
+															{/if}
+															{#if selectedProject && processPid(entry, process)}
+																<button
+																	class="process-kill-button"
+																	type="button"
+																	onmousedown={(event) => {
+																		if (!isPrimaryMouse(event)) return;
+																		void killProcess(selectedProject, entry, process, false);
+																	}}
+																>
+																	Kill
+																</button>
+																<button
+																	class="process-kill-button danger-kill"
+																	type="button"
+																	onmousedown={(event) => {
+																		if (!isPrimaryMouse(event)) return;
+																		void killProcess(selectedProject, entry, process, true);
+																	}}
+																>
+																	Hard kill
+																</button>
+															{/if}
+														</div>
+													</div>
+												{/if}
+
+												<div class="process-meta">
+													{#each processFields(entry, process) as field}
+														<div class="process-meta-item">
+															<span class="process-meta-label">{field.label}</span>
+															<strong>{field.value}</strong>
+														</div>
+													{/each}
+												</div>
+											</div>
+										{/each}
+									</div>
+								{/if}
 							</div>
 						{/each}
 					</div>
@@ -2205,6 +3910,27 @@
 		</div>
 	</main>
 
+	{#if toasts.length}
+		<div class="toast-stack" aria-live="assertive" aria-relevant="additions">
+			{#each toasts as toast (toast.id)}
+				<div class={`toast toast-${toast.level}`} role={toast.level === 'error' ? 'alert' : 'status'}>
+					<div class="toast-copy">
+						<strong>{toast.title}</strong>
+						<span>{toast.message}</span>
+					</div>
+					<button
+						class="toast-dismiss"
+						type="button"
+						aria-label={`Dismiss ${toast.title}`}
+						onmousedown={() => dismissToast(toast.id)}
+					>
+						X
+					</button>
+				</div>
+			{/each}
+		</div>
+	{/if}
+
 	{#if contextMenu}
 		<button
 			class="context-menu-backdrop"
@@ -2218,6 +3944,7 @@
 			{#each contextMenu.items as item}
 				<button
 					class="context-menu-item"
+					class:context-menu-danger={item.danger}
 					type="button"
 					disabled={item.disabled}
 					onmousedown={() => {
@@ -2257,7 +3984,6 @@
 		min-width: 0;
 		flex-direction: column;
 		container-type: inline-size;
-		border-right: 1px solid var(--app-border);
 		background: var(--app-bg);
 		overflow: hidden;
 	}
@@ -2276,9 +4002,8 @@
 		position: absolute;
 		top: 0;
 		bottom: 0;
-		left: 50%;
+		left: 0;
 		width: 1px;
-		transform: translateX(-50%);
 		background: var(--app-border);
 		transition: background-color 120ms ease;
 	}
@@ -2325,6 +4050,8 @@
 	.sort-menu select,
 	.toggle,
 	.project-button,
+	.service-log-button,
+	.process-heading,
 	.overlay-button {
 		border: 0;
 		background: transparent;
@@ -2477,7 +4204,8 @@
 	.tree {
 		flex: 1;
 		min-height: 0;
-		overflow: auto;
+		overflow-x: hidden;
+		overflow-y: auto;
 		padding: 0 0.2rem 0.85rem;
 	}
 
@@ -2492,6 +4220,13 @@
 		align-items: center;
 		border-radius: 0.5rem;
 		overflow: visible;
+	}
+
+	.project-row .toggle {
+		height: 1.25rem;
+		width: 1.25rem;
+		justify-self: center;
+		border-radius: 999px;
 	}
 
 	.project-row.selected::before {
@@ -2590,7 +4325,7 @@
 	.project-watch-indicator {
 		display: inline-flex;
 		align-items: center;
-		color: var(--app-text-muted);
+		color: #1d9bf0;
 	}
 
 	.service-list {
@@ -2656,9 +4391,24 @@
 	.service-title,
 	.row-title {
 		display: flex;
+		align-items: center;
+		min-width: 0;
 		gap: 0.35rem;
 		font-weight: 600;
 		color: var(--app-text);
+	}
+
+	.config-chevron {
+		display: inline-grid;
+		flex: none;
+		width: 1rem;
+		height: 1rem;
+		place-items: center;
+		line-height: 1;
+	}
+
+	.config-chevron :global(svg) {
+		display: block;
 	}
 
 	.service-container,
@@ -2875,6 +4625,15 @@
 		color: var(--app-text);
 	}
 
+	.context-menu-danger {
+		color: #ffaaa6;
+	}
+
+	.context-menu-danger:hover {
+		background: rgba(126, 74, 74, 0.22);
+		color: #ffc0bf;
+	}
+
 	.context-menu-item:disabled {
 		cursor: default;
 		opacity: 0.42;
@@ -2882,6 +4641,73 @@
 
 	.context-menu-item:disabled:hover {
 		background: transparent;
+		color: var(--app-text);
+	}
+
+	.toast-stack {
+		position: absolute;
+		right: 1rem;
+		top: 1rem;
+		z-index: 60;
+		display: flex;
+		width: min(24rem, calc(100vw - 2rem));
+		flex-direction: column;
+		gap: 0.5rem;
+		pointer-events: none;
+	}
+
+	.toast {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 0.8rem;
+		border: 1px solid var(--app-border-strong);
+		border-radius: 0.75rem;
+		background: var(--app-surface-raised);
+		padding: 0.72rem 0.78rem;
+		box-shadow: 0 18px 42px rgba(0, 0, 0, 0.56);
+		pointer-events: auto;
+	}
+
+	.toast-error {
+		border-color: rgba(226, 91, 91, 0.48);
+		background: #120606;
+	}
+
+	.toast-copy {
+		display: flex;
+		min-width: 0;
+		flex-direction: column;
+		gap: 0.24rem;
+	}
+
+	.toast-copy strong {
+		color: #ffc0bf;
+		font-size: 0.78rem;
+	}
+
+	.toast-copy span {
+		color: var(--app-text);
+		font-size: 0.76rem;
+		line-height: 1.35;
+		overflow-wrap: anywhere;
+	}
+
+	.toast-dismiss {
+		flex: none;
+		width: 1.35rem;
+		height: 1.35rem;
+		border: 0;
+		border-radius: 0.38rem;
+		background: transparent;
+		color: var(--app-text-muted);
+		font-size: 0.72rem;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.toast-dismiss:hover {
+		background: var(--app-control-hover);
 		color: var(--app-text);
 	}
 
@@ -2924,6 +4750,83 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.3rem;
+	}
+
+	.resource-strip {
+		display: flex;
+		min-width: 0;
+		flex: 1 1 auto;
+		align-items: center;
+		justify-content: flex-end;
+		flex-wrap: wrap;
+		gap: 0.55rem;
+		overflow: visible;
+	}
+
+	.resource-group {
+		display: inline-flex;
+		min-width: 0;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.28rem;
+	}
+
+	.resource-group-label {
+		color: var(--app-text-subtle);
+		font-size: 0.64rem;
+		font-weight: 700;
+		text-transform: uppercase;
+	}
+
+	.resource-chip {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.22rem;
+		border-radius: 999px;
+		background: var(--app-control);
+		padding: 0.2rem 0.42rem;
+		color: var(--app-text-muted);
+		font-size: 0.68rem;
+		font-weight: 700;
+		white-space: nowrap;
+	}
+
+	.resource-chip strong {
+		color: var(--app-text);
+		font-size: 0.7rem;
+	}
+
+	.metric-value-hover {
+		position: absolute;
+		right: 0;
+		top: calc(100% + 0.35rem);
+		z-index: 45;
+		display: block;
+		width: max-content;
+		max-width: min(16rem, calc(100vw - 2rem));
+		padding: 0.34rem 0.48rem;
+		border: 1px solid var(--app-border-strong);
+		border-radius: 0.48rem;
+		background: var(--app-bg);
+		box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68);
+		color: var(--app-text);
+		font-size: 0.72rem;
+		line-height: 1.15;
+		opacity: 0;
+		pointer-events: none;
+		transform: translateY(-2px);
+		visibility: hidden;
+		transition:
+			opacity 120ms ease,
+			transform 120ms ease,
+			visibility 120ms ease;
+	}
+
+	.resource-chip:hover .metric-value-hover {
+		opacity: 1;
+		transform: translateY(0);
+		visibility: visible;
 	}
 
 	.status-line {
@@ -2975,6 +4878,7 @@
 		grid-auto-rows: min-content;
 		grid-template-areas:
 			'summary'
+			'containers'
 			'processes'
 			'builds'
 			'logs';
@@ -3005,8 +4909,14 @@
 		grid-area: summary;
 	}
 
+	.container-card {
+		grid-area: containers;
+	}
+
 	.log-card {
 		grid-area: logs;
+		max-height: 33vh;
+		overflow: hidden;
 	}
 
 	.process-card {
@@ -3068,7 +4978,8 @@
 	}
 
 	.config-item,
-	.build-item {
+	.build-item,
+	.service-log-item {
 		display: flex;
 		flex-direction: column;
 		gap: 0.12rem;
@@ -3091,7 +5002,8 @@
 	}
 
 	.config-button:hover,
-	.build-button:hover {
+	.build-button:hover,
+	.service-log-button:hover {
 		background: var(--app-surface-hover);
 	}
 
@@ -3113,6 +5025,142 @@
 		border-radius: 0.7rem;
 		background: var(--app-bg);
 		overflow: auto;
+	}
+
+	.build-output {
+		max-height: 33vh;
+		overflow-x: hidden;
+		overflow-y: auto;
+	}
+
+	.service-log-button {
+		width: 100%;
+		text-align: left;
+	}
+
+	.service-log-output {
+		display: flex;
+		flex-direction: column;
+		max-height: 33vh;
+		border-radius: 0.7rem;
+		background: var(--app-bg);
+		overflow: hidden;
+	}
+
+	.service-log-list {
+		display: flex;
+		min-height: 0;
+		flex: 1 1 auto;
+		flex-direction: column;
+		gap: 0.15rem;
+		overflow-x: hidden;
+		overflow-y: auto;
+	}
+
+	.service-log-row {
+		display: flex;
+		align-items: center;
+		justify-content: flex-start;
+		gap: 1rem;
+		border-radius: 0.65rem;
+		padding: 0.55rem 0.7rem;
+		background: var(--app-surface-raised);
+		font-size: 0.78rem;
+	}
+
+	.error-log-row {
+		background: rgba(141, 61, 61, 0.16);
+	}
+
+	.command-log-row {
+		background: rgba(29, 155, 240, 0.12);
+		color: #d9f0ff;
+	}
+
+	.command-status {
+		display: inline-grid;
+		flex: none;
+		width: 1rem;
+		height: 1rem;
+		place-items: center;
+		border-radius: 999px;
+		font-size: 0.68rem;
+		font-weight: 800;
+		line-height: 1;
+	}
+
+	.command-status-succeeded {
+		background: rgba(78, 198, 112, 0.2);
+		color: #77e39a;
+	}
+
+	.command-status-failed {
+		background: rgba(226, 91, 91, 0.2);
+		color: #ff9a96;
+	}
+
+	.command-form {
+		display: grid;
+		flex: none;
+		grid-template-columns: minmax(0, 1fr) auto auto;
+		gap: 0.45rem;
+		padding: 0.55rem;
+		background: var(--app-bg);
+	}
+
+	.command-form input {
+		min-width: 0;
+		border: 1px solid var(--app-border);
+		border-radius: 0.5rem;
+		background: var(--app-control);
+		color: var(--app-text);
+		padding: 0.46rem 0.58rem;
+		font-size: 0.78rem;
+		outline: none;
+	}
+
+	.command-form input:focus {
+		border-color: var(--app-border-strong);
+	}
+
+	.command-form button,
+	.process-kill-button {
+		border: 1px solid var(--app-border);
+		border-radius: 0.5rem;
+		background: var(--app-control);
+		color: var(--app-text-muted);
+		padding: 0.42rem 0.56rem;
+		font-size: 0.72rem;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.process-kill-button {
+		opacity: 0;
+		pointer-events: none;
+		transform: translateY(-1px);
+		transition:
+			opacity 120ms ease,
+			transform 120ms ease;
+	}
+
+	.process-item:hover .process-kill-button,
+	.process-item:focus-within .process-kill-button,
+	.process-kill-button:focus-visible {
+		opacity: 1;
+		pointer-events: auto;
+		transform: translateY(0);
+	}
+
+	.command-form button:disabled {
+		cursor: default;
+		opacity: 0.5;
+	}
+
+	.command-form button:hover:enabled,
+	.process-kill-button:hover {
+		background: var(--app-control-hover);
+		color: var(--app-text);
 	}
 
 	.config-output pre {
@@ -3212,6 +5260,12 @@
 		font-size: 0.78rem;
 	}
 
+	.log-card .log-list {
+		flex: 1 1 auto;
+		overflow-x: hidden;
+		overflow-y: auto;
+	}
+
 	.log-level {
 		min-width: 2.7rem;
 		border-radius: 999px;
@@ -3249,6 +5303,8 @@
 	}
 
 	.log-message {
+		min-width: 0;
+		overflow-wrap: anywhere;
 		color: var(--app-text);
 	}
 
@@ -3263,9 +5319,17 @@
 
 	.process-heading {
 		display: flex;
+		width: 100%;
 		align-items: center;
 		justify-content: space-between;
 		gap: 0.75rem;
+		border-radius: 0.55rem;
+		padding: 0;
+		text-align: left;
+	}
+
+	.process-heading:hover {
+		color: var(--app-text);
 	}
 
 	.process-replica {
@@ -3335,6 +5399,14 @@
 		row-gap: 0.35rem;
 	}
 
+	.process-actions {
+		display: inline-flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 0.35rem;
+		min-width: 0;
+	}
+
 	.command-path {
 		font-size: 0.68rem;
 		color: var(--app-text-subtle);
@@ -3345,6 +5417,11 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		text-align: right;
+	}
+
+	.danger-kill {
+		color: #ffb6b3;
+		border-color: rgba(141, 61, 61, 0.36);
 	}
 
 	.command-line {

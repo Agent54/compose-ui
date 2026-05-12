@@ -30,7 +30,7 @@
 		onRestart: (project: ComposeProject, service: ComposeService) => void;
 		onOpenContextMenu: (event: MouseEvent, project: ComposeProject, service: ComposeService) => void;
 		onPauseToggle: (project: ComposeProject, service: ComposeService) => void;
-		onWatchingToggle: (project: ComposeProject) => void;
+		onWatchingToggle: (project: ComposeProject, service?: ComposeService) => void;
 	} = $props();
 
 	const servicesQuery = useLiveQuery(
@@ -125,9 +125,12 @@
 	function startButtonSpinning(service: ComposeService) {
 		return (
 			buildingServiceId === service.id ||
+			busyAction === `stop:${project.id}:${service.id}` ||
 			busyAction === `start:${project.id}:${service.id}` ||
 			busyAction === `up-no-build:${project.id}:${service.id}` ||
-			busyAction === `restart:${project.id}:${service.id}`
+			busyAction === `restart:${project.id}:${service.id}` ||
+			busyAction === `watching:${project.id}:${service.id}` ||
+			busyAction === `remove:${project.id}:${service.id}`
 		);
 	}
 
@@ -136,9 +139,18 @@
 			return 'restarting';
 		}
 
+		if (busyAction === `stop:${project.id}:${service.id}`) {
+			return 'stopping';
+		}
+
+		if (busyAction === `remove:${project.id}:${service.id}`) {
+			return 'removing';
+		}
+
 		if (
 			busyAction === `start:${project.id}:${service.id}` ||
-			busyAction === `up-no-build:${project.id}:${service.id}`
+			busyAction === `up-no-build:${project.id}:${service.id}` ||
+			busyAction === `watching:${project.id}:${service.id}`
 		) {
 			return 'starting';
 		}
@@ -231,8 +243,9 @@
 							disabled={busyAction !== null}
 						>
 							<Icon
-								name={service.state === 'running' || service.state === 'paused' ? 'stop' : 'play'}
+								name={busyAction === `stop:${project.id}:${service.id}` ? 'refresh' : service.state === 'running' || service.state === 'paused' ? 'stop' : 'play'}
 								size={13}
+								spinning={busyAction === `stop:${project.id}:${service.id}`}
 							/>
 						</button>
 					</span>
@@ -291,14 +304,14 @@
 							aria-label={`${project.watching ? 'Stop watching' : 'Watch'} ${service.serviceName}`}
 							onmousedown={(event) => {
 								if (!isPrimaryMouse(event)) return;
-								onWatchingToggle(project);
+								onWatchingToggle(project, service);
 							}}
 							disabled={busyAction !== null}
 						>
 							<Icon
-								name={busyAction === `watching:${project.id}` ? 'refresh' : project.watching ? 'eye-off' : 'eye'}
+								name={busyAction === `watching:${project.id}:${service.id}` ? 'refresh' : project.watching ? 'eye-off' : 'eye'}
 								size={13}
-								spinning={busyAction === `watching:${project.id}`}
+								spinning={busyAction === `watching:${project.id}:${service.id}`}
 							/>
 						</button>
 					</span>
@@ -416,7 +429,7 @@
 	.service-watch-indicator {
 		display: inline-flex;
 		flex: none;
-		color: var(--app-text-muted);
+		color: #1d9bf0;
 	}
 
 	.service-meta {

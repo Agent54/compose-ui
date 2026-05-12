@@ -66,11 +66,84 @@ export type ComposeBuild = {
 	id: string;
 	projectId: string;
 	projectName: string;
+	kind?: 'build' | 'watch';
+	targetName?: string;
 	status: 'running' | 'succeeded' | 'failed';
 	startedAt: string;
 	finishedAt: string | null;
 	success: boolean | null;
 	streamUrl: string;
+};
+
+export type ResourceUsage = {
+	cpuPercent?: number;
+	memoryBytes?: number;
+	memoryLimitBytes?: number;
+	memoryPercent?: number;
+	networkRxBytes?: number;
+	networkTxBytes?: number;
+	blockReadBytes?: number;
+	blockWriteBytes?: number;
+	pidsCurrent?: number;
+};
+
+export type ResourceLimits = {
+	memoryBytes?: number;
+	memoryReservationBytes?: number;
+	memorySwapBytes?: number;
+	nanoCpus?: number;
+	cpuCores?: number;
+	cpuPeriod?: number;
+	cpuQuota?: number;
+	cpuShares?: number;
+	cpuCount?: number;
+	cpusetCpus?: string;
+	pidsLimit?: number;
+};
+
+export type ResourceUtilization = {
+	memoryLimitPercent?: number;
+	cpuLimitPercent?: number;
+};
+
+export type ResourceContainer = {
+	id: string;
+	name: string;
+	project: string;
+	service: string;
+	state: string;
+	status: string;
+	image: string;
+	usage?: ResourceUsage;
+	limits?: ResourceLimits;
+	utilization?: ResourceUtilization;
+};
+
+export type ResourceService = {
+	name: string;
+	project: string;
+	containers: number;
+	usage?: ResourceUsage;
+	limits?: ResourceLimits;
+	utilization?: ResourceUtilization;
+};
+
+export type ResourceProjectSummary = {
+	name: string;
+	project: string;
+	services: string[];
+	containers: number;
+	usage?: ResourceUsage;
+	limits?: ResourceLimits;
+	utilization?: ResourceUtilization;
+};
+
+export type ProjectResources = {
+	project: string;
+	granularity: string;
+	containers?: ResourceContainer[];
+	services?: ResourceService[];
+	projectSummary?: ResourceProjectSummary;
 };
 
 export type LogEntry = {
