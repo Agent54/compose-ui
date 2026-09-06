@@ -65,6 +65,13 @@ pull requests, manual dispatch, and published GitHub releases (including prerele
 It installs the frozen Deno lockfile, checks the app, builds it, and uploads a
 `compose-ui-static` Actions artifact retained for 14 days.
 
+Every successful push build on `int` also creates a GitHub prerelease tagged
+`int-<run-number>-<short-commit-sha>` at the exact pushed commit, with the archives
+and checksums attached in the same workflow run. These prereleases are not marked
+as the latest stable release. Rerunning a workflow reuses its prerelease and replaces
+the attached assets. The desktop application can pin one of these tags just like a
+stable release tag.
+
 Publishing a GitHub release builds the release's tagged commit and attaches:
 
 - `compose-ui-static.tar.gz`
