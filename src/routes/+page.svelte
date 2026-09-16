@@ -6,6 +6,13 @@
 
 	import Icon from '$lib/components/Icon.svelte';
 	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
+	import { isReplacementBuild, latestBuildFailure, mergeBuilds } from '$lib/central/build-state';
+	import {
+		buildCompletion,
+		parseOutputMessage,
+		readBuildOutput,
+		type OutputMessage
+	} from '$lib/central/output-stream';
 	import {
 		appendLog,
 		buildsCollection,
@@ -147,6 +154,7 @@
 	let activeBuildTargets = $state<Record<string, ActiveBuildTarget>>({});
 	let buildStreamEntries = $state<BuildStreamEntry[]>([]);
 	let serviceLogEntries = $state<Record<string, ServiceLogEntry[]>>({});
+	let serviceLogStreamErrors = $state<Record<string, string>>({});
 	let serviceLogPanels = $state<Record<string, boolean>>({});
 	let serviceCommandInputs = $state<Record<string, string>>({});
 	let serviceCommandBusy = $state<Record<string, boolean>>({});
@@ -155,7 +163,12 @@
 	let buildPanels = $state<Record<string, boolean>>({});
 	let toasts = $state<Toast[]>([]);
 	let toastSequence = 0;
-	const buildEventSources = new Map<string, EventSource>();
+	const buildStreamControllers = new Map<string, AbortController>();
+	const capturedBuilds = new Set<string>();
+	let buildStreamErrors = $state<Record<string, string>>({});
+	let buildHistoryError = $state('');
+	let refreshingBuilds = false;
+	let disposed = false;
 	const watchEventSources = new Map<string, EventSource>();
 	const serviceLogEventSources = new Map<string, EventSource>();
 	const execCommandLogEntries = new Map<string, { key: string; entryId: string }>();
@@ -547,7 +560,7 @@
 	}
 
 	function buildPanelOpen(buildId: string) {
-		return buildPanels[buildId] ?? false;
+		return buildPanels[buildId] ?? true;
 	}
 
 	function toggleBuildPanel(buildId: string) {
@@ -732,7 +745,7 @@
 	}
 
 	function activeBuildTarget(projectId: string) {
-		const current = currentBuilds();
+		const current = builds;
 
 		for (const [buildId, target] of Object.entries(activeBuildTargets)) {
 			const build = current.find((entry) => entry.id === buildId);
@@ -816,7 +829,11 @@
 			return 'Unknown';
 		}
 
-		return projectPendingStatusLabel(project) || project.statusLabel || 'Unknown';
+		return (
+			projectPendingStatusLabel(project) ||
+			(latestBuildFailure(builds, project) ? 'Build failed' : project.statusLabel) ||
+			'Unknown'
+		);
 	}
 
 	function projectDisplayChipClass(project: ComposeProject | undefined) {
@@ -824,7 +841,11 @@
 			return '';
 		}
 
-		return projectPendingStatusLabel(project) ? 'warn-state' : projectStateChipClass(project);
+		return projectPendingStatusLabel(project)
+			? 'warn-state'
+			: latestBuildFailure(builds, project)
+				? 'state-chip-exited'
+				: projectStateChipClass(project);
 	}
 
 	function serviceStartButtonSpinning(project: ComposeProject, service: ComposeService) {
@@ -875,15 +896,27 @@
 	}
 
 	function serviceDisplayStateLabel(project: ComposeProject | undefined, service: ComposeService) {
-		return servicePendingStatusLabel(project, service) || service.state;
+		return (
+			servicePendingStatusLabel(project, service) ||
+			(project && latestBuildFailure(builds, project, service) ? 'build failed' : service.state)
+		);
 	}
 
 	function serviceDisplayStatusText(project: ComposeProject | undefined, service: ComposeService) {
-		return servicePendingStatusLabel(project, service) || service.stateText;
+		return (
+			servicePendingStatusLabel(project, service) ||
+			(project && latestBuildFailure(builds, project, service)
+				? 'Build failed — see build output'
+				: service.stateText)
+		);
 	}
 
 	function serviceDisplayChipClass(project: ComposeProject | undefined, service: ComposeService) {
-		return servicePendingStatusLabel(project, service) ? 'state-chip-mixed' : serviceStateChipClass(service);
+		return servicePendingStatusLabel(project, service)
+			? 'state-chip-mixed'
+			: project && latestBuildFailure(builds, project, service)
+				? 'state-chip-exited'
+				: serviceStateChipClass(service);
 	}
 
 	function currentBuilds() {
@@ -928,7 +961,8 @@
 				continue;
 			}
 
-			setBuildStatus(buildId, 'succeeded');
+			// Container refreshes and stop actions do not determine a build's result.
+			setActiveBuildTarget(buildId, null);
 		}
 	}
 
@@ -959,6 +993,7 @@
 			projectId: project.id,
 			projectName: project.name,
 			kind: 'watch',
+			serviceName: service?.serviceName,
 			targetName: service?.serviceName ?? project.name,
 			status: 'running',
 			startedAt: new Date().toISOString(),
@@ -988,9 +1023,9 @@
 		},
 		fallbackSource: string
 	) {
-		const message = String(payload.message ?? '').trim();
+		const message = String(payload.message ?? '');
 
-		if (!message) {
+		if (!message.trim()) {
 			return;
 		}
 
@@ -1153,14 +1188,8 @@
 
 		source.addEventListener('message', (event) => {
 			try {
-				const payload = JSON.parse((event as MessageEvent).data) as {
-					project?: string;
-					stream?: string;
-					source?: string;
-					message?: string;
-					time?: string;
-				};
-				const message = String(payload.message ?? '').trim();
+				const payload = parseOutputMessage((event as MessageEvent).data);
+				const message = String(payload.message ?? '');
 
 				if (!message) {
 					return;
@@ -1208,8 +1237,14 @@
 			}
 		});
 
+		source.onopen = () => {
+			serviceLogStreamErrors = { ...serviceLogStreamErrors, [key]: '' };
+		};
 		source.onerror = () => {
-			// Let EventSource retry; closing would hide transient reconnects.
+			serviceLogStreamErrors = {
+				...serviceLogStreamErrors,
+				[key]: 'Log stream disconnected. Reconnecting…'
+			};
 		};
 	}
 
@@ -1349,20 +1384,32 @@
 	) {
 		let build: ComposeBuild | null = null;
 
-		if (startResult.buildId && startResult.buildUrl) {
+		if (startResult.buildId) {
 			build = {
 				id: startResult.buildId,
 				projectId: project.id,
 				projectName: project.name,
 				kind: 'build',
+				serviceName: service?.serviceName,
 				targetName: service?.serviceName ?? project.name,
 				status: 'running',
 				startedAt: new Date().toISOString(),
 				finishedAt: null,
 				success: null,
-				streamUrl: startResult.buildUrl
+				streamUrl:
+					startResult.buildUrl || `/builds/${encodeURIComponent(startResult.buildId)}/stream`
 			};
 
+			const existing = currentBuilds().find((entry) => entry.id === build?.id);
+			if (existing)
+				build = {
+					...build,
+					startedAt: existing.startedAt,
+					serverStartedAt: existing.serverStartedAt,
+					status: existing.status,
+					success: existing.success,
+					finishedAt: existing.finishedAt
+				};
 			upsertLocalBuild(build);
 			setActiveBuildTarget(startResult.buildId, {
 				projectId: project.id,
@@ -1373,124 +1420,109 @@
 
 		if (startResult.watching || startResult.watchUrl) {
 			setProjectWatching(project.id, true);
-			if (build) {
-				watchBuildIds.set(project.id, build.id);
-				watchBuildTargets.set(project.id, {
-					projectId: project.id,
-					...(service ? { serviceId: service.id } : {})
-				});
-			}
-			const watchBuildId = build?.id ?? ensureWatchBuild(project, service).id;
+			const watchBuildId = ensureWatchBuild(project, service).id;
 			subscribeToWatch(project, startResult.watchUrl, watchBuildId);
 		}
 	}
 
 	async function refreshBuildState() {
-		if (!uiState) {
-			return [] as ComposeBuild[];
-		}
-
+		if (!uiState || refreshingBuilds || disposed) return currentBuilds();
+		refreshingBuilds = true;
 		try {
-			const nextBuilds = await loadBuilds(uiState);
-			const localWatchBuilds = builds.filter(
-				(build) => build.kind === 'watch' && watchBuildIds.get(build.projectId) === build.id
-			);
-			const nextBuildIds = new Set(nextBuilds.map((build) => build.id));
-			hydrateBuilds([
-				...nextBuilds,
-				...localWatchBuilds.filter((build) => !nextBuildIds.has(build.id))
-			]);
-
-			const runningIds = new Set(
-				[...nextBuilds, ...localWatchBuilds]
-					.filter((build) => build.status === 'running')
-					.map((build) => build.id)
-			);
-
-			for (const buildId of Object.keys(activeBuildTargets)) {
-				if (!runningIds.has(buildId)) {
-					setActiveBuildTarget(buildId, null);
+			const incoming = await loadBuilds(uiState);
+			if (disposed) return currentBuilds();
+			for (const build of incoming) {
+				if (isReplacementBuild(currentBuilds().find((entry) => entry.id === build.id), build)) {
+					buildStreamControllers.get(build.id)?.abort();
+					buildStreamControllers.delete(build.id);
+					capturedBuilds.delete(build.id);
+					buildStreamEntries = buildStreamEntries.filter((entry) => entry.buildId !== build.id);
 				}
 			}
-
+			const nextBuilds = mergeBuilds(currentBuilds(), incoming);
+			hydrateBuilds(nextBuilds);
+			buildHistoryError = '';
 			for (const build of nextBuilds) {
-				if (build.status === 'running' && build.streamUrl && !buildEventSources.has(build.id)) {
-					subscribeToBuild(build);
+				if (build.status === 'running') {
+					const project = visibleProjects.find(
+						(entry) => entry.id === build.projectId || entry.name === build.projectName
+					);
+					setActiveBuildTarget(
+						build.id,
+						activeBuildTargets[build.id] ?? { projectId: project?.id ?? build.projectId }
+					);
+				} else {
+					setActiveBuildTarget(build.id, null);
 				}
+				if (build.streamUrl && !capturedBuilds.has(build.id)) subscribeToBuild(build);
 			}
-
 			return nextBuilds;
-		} catch {
-			return [] as ComposeBuild[];
-		}
-	}
-
-	function closeBuildStream(buildId: string) {
-		const source = buildEventSources.get(buildId);
-
-		if (source) {
-			source.close();
-			buildEventSources.delete(buildId);
+		} catch (error) {
+			buildHistoryError = errorMessage(error, 'Build history is unavailable. Retrying…');
+			return currentBuilds();
+		} finally {
+			refreshingBuilds = false;
 		}
 	}
 
 	function subscribeToBuild(build: ComposeBuild) {
-		if (!uiState || !build.streamUrl || buildEventSources.has(build.id)) {
-			return;
-		}
-
+		if (!uiState || disposed || !build.streamUrl || buildStreamControllers.has(build.id)) return;
+		const controller = new AbortController();
+		buildStreamControllers.set(build.id, controller);
+		buildStreamErrors = { ...buildStreamErrors, [build.id]: '' };
 		const streamUrl = resolveBuildStreamUrl(uiState, build.streamUrl);
-
-		if (!streamUrl) {
-			return;
-		}
-
-		const source = new EventSource(streamUrl);
-		buildEventSources.set(build.id, source);
-		setActiveBuildTarget(build.id, activeBuildTargets[build.id] ?? { projectId: build.projectId });
-
-		source.addEventListener('message', (event) => {
-			try {
-				const payload = JSON.parse((event as MessageEvent).data) as {
-					project?: string;
-					stream?: string;
-					source?: string;
-					message?: string;
-					time?: string;
-				};
-				const projectId = String(payload.project ?? build.projectId).trim() || build.projectId;
-				appendBuildStreamEntry(build.id, projectId, payload, 'Compose');
-				const message = String(payload.message ?? '').trim();
-
-				if (watchMessageFinishesProgress(message)) {
-					setBuildStatus(build.id, 'succeeded');
-				} else if (messageFailsProgress(message)) {
-					setBuildStatus(build.id, 'failed');
-				}
-			} catch {
-				// Ignore malformed buffered messages.
-			}
-		});
-
-		source.onerror = () => {
-			void refreshBuildState().then((nextBuilds) => {
-				const refreshedBuild = nextBuilds.find((entry) => entry.id === build.id);
-
-				if (!refreshedBuild || refreshedBuild.status !== 'running') {
-					closeBuildStream(build.id);
-					setActiveBuildTarget(build.id, null);
-
-					if (refreshedBuild) {
-						appendLog(
-							build.projectId,
-							refreshedBuild.status === 'failed' ? 'error' : 'ok',
-							`${buildRowTitle(refreshedBuild)} ${refreshedBuild.status === 'failed' ? 'failed' : 'succeeded'}.`
-						);
-					}
-					void refresh({ silent: true });
-				}
-			});
+		const toEntries = (messages: OutputMessage[]): BuildStreamEntry[] =>
+			messages.map((message, index) => ({
+				id: `${build.id}:${index}`,
+				buildId: build.id,
+				projectId: build.projectId,
+				time: formatBuildTime(message.time ?? ''),
+				source: message.source || 'Compose',
+				stream: message.stream || '',
+				message: message.message
+			}));
+		const replaceOutput = (messages: OutputMessage[]) => {
+			buildStreamEntries = [
+				...buildStreamEntries.filter((entry) => entry.buildId !== build.id),
+				...toEntries(messages)
+			];
 		};
+		const capturedLength = buildStreamEntriesForBuild(build.id).length;
+		void (async () => {
+			const attempt: OutputMessage[] = [];
+			try {
+				let messages = await readBuildOutput(streamUrl, controller.signal, (message) => {
+					attempt.push(message);
+					// Keep previously captured output visible until replay has caught up.
+					if (attempt.length > capturedLength) {
+						buildStreamEntries.push({
+							...toEntries([message])[0],
+							id: `${build.id}:${attempt.length - 1}`
+						});
+					}
+					const status = buildCompletion(message);
+					if (status) setBuildStatus(build.id, status);
+				});
+				if (build.status === 'running') {
+					// The server can drop live messages for slow subscribers. Once finished,
+					// replay its complete stored backlog to recover every retained line.
+					messages = await readBuildOutput(streamUrl, controller.signal, () => {});
+				}
+				if (controller.signal.aborted) return;
+				replaceOutput(messages);
+				capturedBuilds.add(build.id);
+				void refreshBuildState();
+			} catch (error) {
+				if (!controller.signal.aborted) {
+					buildStreamErrors = {
+						...buildStreamErrors,
+						[build.id]: errorMessage(error, 'Build output is unavailable. Retrying…')
+					};
+				}
+			} finally {
+				if (buildStreamControllers.get(build.id) === controller) buildStreamControllers.delete(build.id);
+			}
+		})();
 	}
 
 	function closeWatchStream(projectId: string) {
@@ -1501,7 +1533,11 @@
 			watchEventSources.delete(projectId);
 		}
 
-		setWatchBuildStatus(projectId, 'succeeded', { clear: true });
+		setWatchBuildStatus(
+			projectId,
+			currentWatchBuild(projectId)?.status === 'failed' ? 'failed' : 'succeeded',
+			{ clear: true }
+		);
 	}
 
 	function subscribeToWatch(
@@ -1532,16 +1568,10 @@
 
 		source.addEventListener('message', (event) => {
 			try {
-				const payload = JSON.parse((event as MessageEvent).data) as {
-					project?: string;
-					stream?: string;
-					source?: string;
-					message?: string;
-					time?: string;
-				};
+				const payload = parseOutputMessage((event as MessageEvent).data);
 				const payloadProject = String(payload.project ?? '').trim();
 				const projectId = !payloadProject || payloadProject === project.name ? project.id : payloadProject;
-				const message = String(payload.message ?? '').trim();
+				const message = String(payload.message ?? '');
 
 				if (!message) {
 					return;
@@ -1553,15 +1583,30 @@
 					setWatchBuildStatus(project.id, 'running');
 				}
 
-				if (watchMessageFinishesProgress(message)) {
-					setWatchBuildStatus(project.id, /watch disabled/i.test(message) ? 'succeeded' : 'succeeded', {
-						clear: /watch disabled/i.test(message)
-					});
+				if (messageFailsProgress(message)) {
+					setWatchBuildStatus(project.id, 'failed');
+				} else if (watchMessageFinishesProgress(message)) {
+					setWatchBuildStatus(
+						project.id,
+						currentWatchBuild(project.id)?.status === 'failed' ? 'failed' : 'succeeded',
+						{
+							clear: /watch disabled/i.test(message)
+						}
+					);
 				}
 			} catch {
 				// Ignore malformed watch messages.
 			}
 		});
+		source.onopen = () => {
+			buildStreamErrors = { ...buildStreamErrors, [watchBuildId]: '' };
+		};
+		source.onerror = () => {
+			buildStreamErrors = {
+				...buildStreamErrors,
+				[watchBuildId]: 'Watch output disconnected. Reconnecting…'
+			};
+		};
 	}
 
 	function syncWatchStreams(projects: ComposeProject[]) {
@@ -1656,6 +1701,9 @@
 		const intervalId = window.setInterval(() => {
 			const currentUi = uiStateCollection.state.get('app');
 
+			// Builds must still be discovered while a blocking /up request is pending.
+			void refreshBuildState();
+
 			if (!currentUi || currentUi.autoRefreshPaused || refreshing || busyAction) {
 				return;
 			}
@@ -1666,12 +1714,13 @@
 		}, LS_POLL_INTERVAL_MS);
 
 		return () => {
+			disposed = true;
 			window.removeEventListener('hashchange', handleHashChange);
 			window.clearInterval(intervalId);
-			for (const source of buildEventSources.values()) {
-				source.close();
+			for (const source of buildStreamControllers.values()) {
+				source.abort();
 			}
-			buildEventSources.clear();
+			buildStreamControllers.clear();
 			for (const source of watchEventSources.values()) {
 				source.close();
 			}
@@ -2437,6 +2486,7 @@
 	}
 
 	function projectRowStatusLabel(project: ComposeProject) {
+		if (latestBuildFailure(builds, project)) return 'Build failed';
 		const matches = [...project.statusLabel.matchAll(/([a-z-]+)(?:\((\d+)\))?/gi)];
 
 		if (matches.length !== 1) {
@@ -2448,7 +2498,7 @@
 	}
 
 	function shouldShowProjectRowStatus(project: ComposeProject) {
-		if (projectPendingStatusLabel(project)) {
+		if (projectPendingStatusLabel(project) || latestBuildFailure(builds, project)) {
 			return true;
 		}
 
@@ -2468,10 +2518,12 @@
 	}
 
 	function projectRowTooltipText(project: ComposeProject) {
-		return `${project.name}\n${project.statusLabel}`;
+		return `${project.name}\n${projectDisplayStatusLabel(project)}`;
 	}
 
 	function projectIconTone(project: ComposeProject) {
+		if (latestBuildFailure(builds, project) && !projectStartButtonSpinning(project))
+			return 'project-icon-exited';
 		const aggregateState = projectAggregateState(project);
 
 		if (aggregateState === 'running') {
@@ -2714,7 +2766,7 @@
 			serviceQueryEpoch += 1;
 		}
 
-		clearActiveTargets(project.id, options?.serviceId);
+		await refreshBuildState();
 		appendLog(project.id, 'ok', logMessage);
 	}
 
@@ -2801,6 +2853,7 @@
 			reportActionError(project, shouldStop ? 'Stop failed' : 'Start failed', message);
 		} finally {
 			busyAction = null;
+			void refreshBuildState();
 		}
 	}
 
@@ -2842,6 +2895,7 @@
 			reportActionError(project, 'Start failed', message);
 		} finally {
 			busyAction = null;
+			void refreshBuildState();
 		}
 	}
 
@@ -2882,6 +2936,7 @@
 			reportActionError(project, 'Restart failed', message);
 		} finally {
 			busyAction = null;
+			void refreshBuildState();
 		}
 	}
 
@@ -2922,6 +2977,7 @@
 			reportActionError(project, 'Remove failed', message);
 		} finally {
 			busyAction = null;
+			void refreshBuildState();
 		}
 	}
 
@@ -2975,6 +3031,7 @@
 			reportActionError(project, isUnpause ? 'Resume failed' : 'Pause failed', message);
 		} finally {
 			busyAction = null;
+			void refreshBuildState();
 		}
 	}
 
@@ -3028,6 +3085,7 @@
 			reportActionError(project, nextWatching ? 'Watch failed' : 'Watch stop failed', message);
 		} finally {
 			busyAction = null;
+			void refreshBuildState();
 		}
 	}
 
@@ -3340,7 +3398,11 @@
 								<span class="project-copy">
 									<span class="project-name">
 										<Icon
-											name={projectStartButtonSpinning(project) ? 'refresh' : 'container'}
+											name={projectStartButtonSpinning(project)
+												? 'refresh'
+												: latestBuildFailure(builds, project)
+													? 'warning'
+													: 'container'}
 											size={14}
 											class={projectIconTone(project)}
 											spinning={projectStartButtonSpinning(project)}
@@ -3461,6 +3523,7 @@
 								{selectedContainerId}
 								{busyAction}
 								buildingServiceId={activeBuildTarget(project.id)?.serviceId}
+								{builds}
 								sortBy={uiState?.sortBy ?? 'status'}
 								refreshEpoch={serviceQueryEpoch}
 								onContainerSelect={handleContainerSelect}
@@ -3638,6 +3701,11 @@
 								</button>
 
 								{#if serviceLogOpen(selectedProject, service)}
+									{#if serviceLogStreamErrors[serviceLogKey(selectedProject.id, service.id)]}
+										<div class="config-output-state output-error" role="status">
+											{serviceLogStreamErrors[serviceLogKey(selectedProject.id, service.id)]}
+										</div>
+									{/if}
 									{@const entries = serviceLogsFor(selectedProject, service)}
 									<div class="service-log-output">
 										{#if entries.length}
@@ -3800,7 +3868,7 @@
 												{/if}
 
 												<div class="process-meta">
-													{#each processFields(entry, process) as field}
+													{#each processFields(entry, process) as field (field.label)}
 														<div class="process-meta-item">
 															<span class="process-meta-label">{field.label}</span>
 															<strong>{field.value}</strong>
@@ -3828,6 +3896,13 @@
 					<p class="eyebrow">Build</p>
 				</div>
 
+				{#if buildHistoryError}
+					<div class="config-output-state output-error" role="alert">
+						{buildHistoryError}
+						<button type="button" onclick={() => void refreshBuildState()}>Retry</button>
+					</div>
+				{/if}
+
 				{#if selectedProjectBuilds.length}
 					<div class="build-list">
 						{#each selectedProjectBuilds as build (build.id)}
@@ -3836,11 +3911,8 @@
 								<button
 									class="build-button"
 									type="button"
-									aria-pressed={buildPanelOpen(build.id)}
-									onmousedown={(event) => {
-										if (!isPrimaryMouse(event)) return;
-										toggleBuildPanel(build.id);
-									}}
+									aria-expanded={buildPanelOpen(build.id)}
+									onclick={() => toggleBuildPanel(build.id)}
 								>
 									<span class="build-copy">
 										<span class="row-title">
@@ -3850,6 +3922,10 @@
 											{buildRowTitle(build)}
 											{#if build.status === 'running'}
 												<Icon name="refresh" size={12} spinning={true} />
+											{:else if build.status === 'failed'}
+												<span class="output-error" aria-label="Build failed"
+													><Icon name="warning" size={14} /></span
+												>
 											{/if}
 										</span>
 									</span>
@@ -3863,10 +3939,22 @@
 
 								{#if buildPanelOpen(build.id)}
 									<div class="build-output">
+										{#if buildStreamErrors[build.id]}
+											<div class="config-output-state output-error" role="alert">
+												{buildStreamErrors[build.id]}
+												{#if build.streamUrl}<button
+														type="button"
+														onclick={() => subscribeToBuild(build)}>Retry output</button
+													>{/if}
+											</div>
+										{/if}
 										{#if entries.length}
 											<div class="build-stream-list">
 												{#each entries as entry (entry.id)}
-													<div class="build-stream-row">
+													<div
+														class="build-stream-row"
+														class:output-error={isErrorLogLine(entry.stream, entry.message)}
+													>
 														<span class="log-time">{entry.time}</span>
 														<span class="build-stream-source">{entry.source}</span>
 														<span class="log-message">{entry.message}</span>
@@ -3875,7 +3963,7 @@
 											</div>
 										{:else}
 											<div class="config-output-state">
-												{build.status === 'running' ? 'Waiting for build output…' : 'No output captured for this build.'}
+												{build.streamUrl ? 'Loading build output…' : 'Waiting for watch output…'}
 											</div>
 										{/if}
 									</div>
@@ -3941,7 +4029,7 @@
 		></button>
 
 		<div class="context-menu" style={`left:${contextMenu.x}px;top:${contextMenu.y}px;`}>
-			{#each contextMenu.items as item}
+			{#each contextMenu.items as item (item.label)}
 				<button
 					class="context-menu-item"
 					class:context-menu-danger={item.danger}
@@ -5300,6 +5388,15 @@
 		width: 3rem;
 		color: var(--app-text-subtle);
 		font-variant-numeric: tabular-nums;
+	}
+
+	.output-error,
+	.output-error .log-message {
+		color: #e06c75;
+	}
+
+	.build-stream-row .log-message {
+		white-space: pre-wrap;
 	}
 
 	.log-message {

@@ -36,6 +36,9 @@ jobs:
       - name: Check types and Svelte components
         run: deno task check
 
+      - name: Test build status and output recovery
+        run: deno task test
+
       - name: Build static assets
         run: deno task build
 

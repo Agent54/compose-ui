@@ -531,13 +531,18 @@ function toBuild(raw: ListedBuild, index: number): ComposeBuild {
 		projectName,
 		kind: 'build',
 		status:
-			raw.status === 'succeeded' || raw.status === 'failed' || raw.status === 'running'
-				? raw.status
-				: 'running',
+			raw.success === false
+				? 'failed'
+				: raw.success === true
+					? 'succeeded'
+					: raw.status === 'succeeded' || raw.status === 'failed' || raw.status === 'running'
+						? raw.status
+						: 'running',
 		startedAt: String(raw.startedAt ?? ''),
+		serverStartedAt: String(raw.startedAt ?? ''),
 		finishedAt: raw.finishedAt ?? null,
 		success: typeof raw.success === 'boolean' ? raw.success : null,
-		streamUrl: String(raw.streamUrl ?? '').trim()
+		streamUrl: String(raw.streamUrl ?? '').trim() || `/builds/${encodeURIComponent(id)}/stream`
 	};
 }
 

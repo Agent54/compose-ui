@@ -68,8 +68,10 @@ export type ComposeBuild = {
 	projectName: string;
 	kind?: 'build' | 'watch';
 	targetName?: string;
+	serviceName?: string;
 	status: 'running' | 'succeeded' | 'failed';
 	startedAt: string;
+	serverStartedAt?: string;
 	finishedAt: string | null;
 	success: boolean | null;
 	streamUrl: string;

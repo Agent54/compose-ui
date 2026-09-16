@@ -1,5 +1,6 @@
 <script lang="ts">
 	type IconName =
+		| 'warning'
 		| 'chevron'
 		| 'container'
 		| 'dotted-circle'
@@ -47,7 +48,11 @@
 	class={`${className} ${rotated ? 'rotated' : ''} ${spinning ? 'spinning' : ''}`.trim()}
 	aria-hidden="true"
 >
-	{#if name === 'chevron'}
+	{#if name === 'warning'}
+		<path d="M12 3 2 21h20L12 3Z" />
+		<path d="M12 9v5" />
+		<path d="M12 17h.01" />
+	{:else if name === 'chevron'}
 		<path d="m9 6 6 6-6 6" />
 	{:else if name === 'container'}
 		<path d="M4 7.5 12 4l8 3.5v9L12 20l-8-3.5z" />

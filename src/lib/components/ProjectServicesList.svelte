@@ -2,6 +2,8 @@
 	import { eq } from '@tanstack/db';
 	import { useLiveQuery } from '@tanstack/svelte-db';
 
+	import { latestBuildFailure } from '$lib/central/build-state';
+	import type { ComposeBuild } from '$lib/central/types';
 	import Icon from '$lib/components/Icon.svelte';
 	import { servicesCollection, type ComposeProject, type ComposeService } from '$lib/central';
 
@@ -10,6 +12,7 @@
 		selectedContainerId,
 		busyAction,
 		buildingServiceId,
+		builds,
 		sortBy,
 		refreshEpoch,
 		onContainerSelect,
@@ -23,6 +26,7 @@
 		selectedContainerId: string;
 		busyAction: string | null;
 		buildingServiceId?: string;
+		builds: ComposeBuild[];
 		sortBy: 'path' | 'name' | 'status';
 		refreshEpoch: number;
 		onContainerSelect: (projectId: string, serviceId: string) => void;
@@ -71,6 +75,8 @@
 	});
 
 	function serviceStateTone(service: ComposeService) {
+		if (latestBuildFailure(builds, project, service) && !startButtonSpinning(service))
+			return 'service-state-exited';
 		if (service.state === 'running') {
 			return 'service-state-running';
 		}
@@ -95,6 +101,7 @@
 	}
 
 	function serviceStateIcon(service: ComposeService) {
+		if (latestBuildFailure(builds, project, service)) return 'warning';
 		if (service.state === 'uncreated') {
 			return 'dotted-circle';
 		}
@@ -119,7 +126,10 @@
 	}
 
 	function shouldShowServiceStatus(service: ComposeService) {
-		return Boolean(servicePendingStatusLabel(service)) || service.state !== 'uncreated';
+		return (
+			Boolean(servicePendingStatusLabel(service) || latestBuildFailure(builds, project, service)) ||
+			service.state !== 'uncreated'
+		);
 	}
 
 	function startButtonSpinning(service: ComposeService) {
@@ -163,11 +173,16 @@
 	}
 
 	function serviceDisplayStatusLabel(service: ComposeService) {
-		return servicePendingStatusLabel(service) || service.stateText;
+		return (
+			servicePendingStatusLabel(service) ||
+			(latestBuildFailure(builds, project, service) ? 'Build failed' : service.stateText)
+		);
 	}
 
 	function serviceRowTooltipText(service: ComposeService) {
-		const pendingStatus = servicePendingStatusLabel(service);
+		const pendingStatus =
+			servicePendingStatusLabel(service) ||
+			(latestBuildFailure(builds, project, service) ? 'Build failed — see build output' : '');
 
 		if (pendingStatus) {
 			return `${service.containerName}\n${pendingStatus}`;
