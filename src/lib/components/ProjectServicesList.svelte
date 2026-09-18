@@ -5,7 +5,12 @@
 	import { latestBuildFailure } from '$lib/central/build-state';
 	import type { ComposeBuild } from '$lib/central/types';
 	import Icon from '$lib/components/Icon.svelte';
-	import { servicesCollection, type ComposeProject, type ComposeService } from '$lib/central';
+	import {
+		composeServiceUrl,
+		servicesCollection,
+		type ComposeProject,
+		type ComposeService
+	} from '$lib/central';
 
 	let {
 		project,
@@ -243,6 +248,20 @@
 				<span class="row-tooltip-bubble" aria-hidden="true">{serviceRowTooltipText(service)}</span>
 
 				<div class="row-actions">
+					{#if service.state === 'running'}
+						<span class="tooltip-anchor" data-tooltip={`Open ${composeServiceUrl(service)}`}>
+							<a
+								class="overlay-button service-link"
+								href={composeServiceUrl(service)}
+								target="_blank"
+								rel="external noreferrer"
+								aria-label={`Open ${service.serviceName} in browser`}
+							>
+								<Icon name="link" size={13} />
+							</a>
+						</span>
+					{/if}
+
 					<span
 						class="tooltip-anchor"
 						data-tooltip={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
@@ -510,6 +529,16 @@
 		border-color: var(--app-border-strong);
 		background: var(--app-surface-hover);
 		color: var(--app-text);
+	}
+
+	.overlay-button:focus-visible {
+		border-color: var(--app-border-strong);
+		background: var(--app-surface-hover);
+		color: var(--app-text);
+	}
+
+	.service-link {
+		text-decoration: none;
 	}
 
 	.overlay-button:disabled {

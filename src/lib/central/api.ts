@@ -418,6 +418,23 @@ function parseComposePath(raw: ListedContainer) {
 	return composePath || undefined;
 }
 
+function parseReplica(raw: ListedContainer) {
+	const labels = raw.Labels ?? raw.labels;
+	const replica = labels?.['com.docker.compose.container-number']?.trim();
+	return replica || undefined;
+}
+
+export function composeServiceUrl(
+	service: Pick<ComposeService, 'serviceName' | 'projectName' | 'replica'>
+) {
+	const serviceName = service.serviceName.trim().toLowerCase();
+	const projectName = service.projectName.trim().toLowerCase();
+	const replica = Number(service.replica);
+	const replicaSuffix = Number.isInteger(replica) && replica > 1 ? `_${replica}` : '';
+
+	return `http://${serviceName}_${projectName}${replicaSuffix}.localhost:5196/`;
+}
+
 function toService(raw: ListedContainer, project: ComposeProject, index: number): ComposeService {
 	const serviceName = firstNonEmptyString(
 		raw.Service,
@@ -443,9 +460,11 @@ function toService(raw: ListedContainer, project: ComposeProject, index: number)
 	return {
 		id: `${project.id}:${containerId}`,
 		projectId: project.id,
+		projectName: firstNonEmptyString(raw.Project, raw.project, project.name, project.id),
 		name: serviceName,
 		serviceName,
 		containerName,
+		replica: parseReplica(raw),
 		composePath: parseComposePath(raw),
 		state: parseServiceState(rawState, rawStatus),
 		stateText: stripHealthSuffix(rawStatus || rawState || 'unknown'),

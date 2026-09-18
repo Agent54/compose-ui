@@ -42,9 +42,11 @@ export type ComposeProject = {
 export type ComposeService = {
 	id: string;
 	projectId: string;
+	projectName: string;
 	name: string;
 	serviceName: string;
 	containerName: string;
+	replica?: string;
 	composePath?: string;
 	state: 'running' | 'exited' | 'paused' | 'created' | 'uncreated' | 'unknown';
 	stateText: string;
