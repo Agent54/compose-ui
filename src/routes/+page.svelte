@@ -3667,53 +3667,55 @@
 					<div class="compact-list">
 						{#each selectedServices as service (service.id)}
 							<div class="service-log-item">
-								<button
-									class="compact-row service-log-button"
-									class:service-log-button-linked={service.state === 'running'}
-									type="button"
-									aria-pressed={serviceLogOpen(selectedProject, service)}
-									onmousedown={(event) => {
-										if (!isPrimaryMouse(event)) return;
-										toggleServiceLogs(selectedProject, service);
-									}}
-								>
-									<div>
-										<div class="row-title">
-											<span class="config-chevron">
-												<Icon name="chevron" size={12} rotated={serviceLogOpen(selectedProject, service)} />
-											</span>
-											{service.serviceName}
-										</div>
-										<div class="row-subtitle">{service.containerName}</div>
-									</div>
-									<div class="row-tail">
-										{#if serviceLogErrorCount(selectedProject, service)}
-											<span class="state-chip state-chip-exited">
-												{serviceLogErrorCount(selectedProject, service)} errors
-											</span>
-										{/if}
-										<span class={`state-chip ${serviceDisplayChipClass(selectedProject, service)}`}>
-											{serviceDisplayStateLabel(selectedProject, service)}
-										</span>
-										<span>{serviceDisplayStatusText(selectedProject, service)}</span>
-										{#if service.health && !servicePendingStatusLabel(selectedProject, service)}
-											<span class="health-tag">({service.health})</span>
-										{/if}
-									</div>
-								</button>
-
-								{#if service.state === 'running'}
-									<a
-										class="service-overview-link"
-										href={composeServiceUrl(service)}
-										target="_blank"
-										rel="external noreferrer"
-										aria-label={`Open ${service.serviceName} in browser`}
+								<div class="service-log-header">
+									<button
+										class="compact-row service-log-button"
+										class:service-log-button-linked={service.state === 'running'}
+										type="button"
+										aria-pressed={serviceLogOpen(selectedProject, service)}
+										onmousedown={(event) => {
+											if (!isPrimaryMouse(event)) return;
+											toggleServiceLogs(selectedProject, service);
+										}}
 									>
-										<Icon name="link" size={13} />
-										<span>Open</span>
-									</a>
-								{/if}
+										<div>
+											<div class="row-title">
+												<span class="config-chevron">
+													<Icon name="chevron" size={12} rotated={serviceLogOpen(selectedProject, service)} />
+												</span>
+												{service.serviceName}
+											</div>
+											<div class="row-subtitle">{service.containerName}</div>
+										</div>
+										<div class="row-tail">
+											{#if serviceLogErrorCount(selectedProject, service)}
+												<span class="state-chip state-chip-exited">
+													{serviceLogErrorCount(selectedProject, service)} errors
+												</span>
+											{/if}
+											<span class={`state-chip ${serviceDisplayChipClass(selectedProject, service)}`}>
+												{serviceDisplayStateLabel(selectedProject, service)}
+											</span>
+											<span>{serviceDisplayStatusText(selectedProject, service)}</span>
+											{#if service.health && !servicePendingStatusLabel(selectedProject, service)}
+												<span class="health-tag">({service.health})</span>
+											{/if}
+										</div>
+									</button>
+
+									{#if service.state === 'running'}
+										<a
+											class="service-overview-link"
+											href={composeServiceUrl(service)}
+											target="_blank"
+											rel="external noreferrer"
+											aria-label={`Open ${service.serviceName} in browser`}
+										>
+											<Icon name="link" size={13} />
+											<span>Open</span>
+										</a>
+									{/if}
+								</div>
 
 								{#if serviceLogOpen(selectedProject, service)}
 									{#if serviceLogStreamErrors[serviceLogKey(selectedProject.id, service.id)]}
@@ -5088,7 +5090,7 @@
 		gap: 0.12rem;
 	}
 
-	.service-log-item {
+	.service-log-header {
 		position: relative;
 	}
 
@@ -5151,7 +5153,8 @@
 
 	.service-overview-link {
 		position: absolute;
-		top: 0.55rem;
+		top: 50%;
+		transform: translateY(-50%);
 		right: 0.55rem;
 		display: inline-flex;
 		align-items: center;
