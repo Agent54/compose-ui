@@ -18,6 +18,7 @@
 		buildsCollection,
 		checkHealth,
 		composeLogsStreamUrl,
+		composeServiceUrl,
 		executeProjectCommand,
 		type ComposeBuild,
 		killProjectProcess,
@@ -3668,6 +3669,7 @@
 							<div class="service-log-item">
 								<button
 									class="compact-row service-log-button"
+									class:service-log-button-linked={service.state === 'running'}
 									type="button"
 									aria-pressed={serviceLogOpen(selectedProject, service)}
 									onmousedown={(event) => {
@@ -3699,6 +3701,19 @@
 										{/if}
 									</div>
 								</button>
+
+								{#if service.state === 'running'}
+									<a
+										class="service-overview-link"
+										href={composeServiceUrl(service)}
+										target="_blank"
+										rel="external noreferrer"
+										aria-label={`Open ${service.serviceName} in browser`}
+									>
+										<Icon name="link" size={13} />
+										<span>Open</span>
+									</a>
+								{/if}
 
 								{#if serviceLogOpen(selectedProject, service)}
 									{#if serviceLogStreamErrors[serviceLogKey(selectedProject.id, service.id)]}
@@ -5073,6 +5088,10 @@
 		gap: 0.12rem;
 	}
 
+	.service-log-item {
+		position: relative;
+	}
+
 	.config-button,
 	.build-button {
 		display: flex;
@@ -5124,6 +5143,37 @@
 	.service-log-button {
 		width: 100%;
 		text-align: left;
+	}
+
+	.service-log-button-linked {
+		padding-right: 5.5rem;
+	}
+
+	.service-overview-link {
+		position: absolute;
+		top: 0.55rem;
+		right: 0.55rem;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.32rem;
+		height: 2rem;
+		min-width: 4.25rem;
+		border: 1px solid var(--app-border);
+		border-radius: 0.55rem;
+		background: var(--app-control);
+		color: var(--app-text-muted);
+		font-size: 0.72rem;
+		font-weight: 700;
+		text-decoration: none;
+	}
+
+	.service-overview-link:hover,
+	.service-overview-link:focus-visible {
+		border-color: var(--app-border-strong);
+		background: var(--app-control-hover);
+		color: var(--app-text);
+		outline: none;
 	}
 
 	.service-log-output {
