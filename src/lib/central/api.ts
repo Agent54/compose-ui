@@ -459,6 +459,7 @@ function toService(raw: ListedContainer, project: ComposeProject, index: number)
 
 	return {
 		id: `${project.id}:${containerId}`,
+		containerId,
 		projectId: project.id,
 		projectName: firstNonEmptyString(raw.Project, raw.project, project.name, project.id),
 		name: serviceName,
@@ -692,6 +693,31 @@ export async function startServices(
 		...(services?.length ? { services } : {}),
 		wait: false
 	});
+}
+
+export async function startContainer(
+	ui: UiState,
+	project: Pick<ComposeProject, 'id' | 'path'>,
+	containerId: string
+) {
+	const response = await fetch(
+		joinUrl(
+			ui.serverUrl,
+			ui.apiVersion,
+			`/start/${encodeURIComponent(project.id)}/container`
+		),
+		{
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json'
+			},
+			body: JSON.stringify({ path: project.path, container: containerId })
+		}
+	);
+
+	if (!response.ok) {
+		throw await responseError(`Starting container ${containerId}`, response);
+	}
 }
 
 export async function stopServices(

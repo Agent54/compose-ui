@@ -7,6 +7,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import {
 		composeServiceUrl,
+		isExpectedServiceStop,
 		servicesCollection,
 		type ComposeProject,
 		type ComposeService
@@ -91,6 +92,10 @@
 		}
 
 		if (service.state === 'uncreated') {
+			return 'service-state-uncreated';
+		}
+
+		if (isExpectedServiceStop(service)) {
 			return 'service-state-uncreated';
 		}
 

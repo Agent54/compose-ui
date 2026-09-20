@@ -41,6 +41,7 @@ export type ComposeProject = {
 
 export type ComposeService = {
 	id: string;
+	containerId: string;
 	projectId: string;
 	projectName: string;
 	name: string;

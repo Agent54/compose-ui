@@ -22,6 +22,7 @@
 		executeProjectCommand,
 		type ComposeBuild,
 		killProjectProcess,
+		isExpectedServiceStop,
 		loadProjectConfig,
 		loadBuilds,
 		loadProjectProcesses,
@@ -57,6 +58,7 @@
 		setSidebarWidth,
 		setProjectWatching,
 		stopServices,
+		startContainer,
 		startProject,
 		uiStateCollection,
 		unpauseServices,
@@ -307,7 +309,8 @@
 	let contextMenu = $state<ContextMenuState | null>(null);
 	const ACTION_SETTLE_ATTEMPTS = 8;
 	const ACTION_SETTLE_DELAY_MS = 350;
-	const LS_POLL_INTERVAL_MS = 5000;
+	const LS_POLL_INTERVAL_MS = 10_000;
+	const BUILD_STREAM_END_THRESHOLD_PX = 24;
 
 	function parseSelectionHash(hash: string): HashSelection | null {
 		const raw = hash.replace(/^#/, '').replace(/^\?/, '');
@@ -508,7 +511,7 @@
 
 	function statusLineText() {
 		const base = uiState?.statusDetail ?? 'Status unavailable.';
-		return `${base} ${autoRefreshPaused ? 'Polling paused.' : 'Polling every 5s.'}`;
+		return `${base} ${autoRefreshPaused ? 'Polling paused.' : 'Polling every 10s.'}`;
 	}
 
 	function statusTooltipText() {
@@ -568,6 +571,40 @@
 		buildPanels = {
 			...buildPanels,
 			[buildId]: !buildPanelOpen(buildId)
+		};
+	}
+
+	function keepBuildOutputPinned(node: HTMLElement) {
+		let pinnedToEnd = true;
+		let animationFrame = 0;
+
+		const isAtEnd = () =>
+			node.scrollHeight - node.scrollTop - node.clientHeight <= BUILD_STREAM_END_THRESHOLD_PX;
+
+		const rememberScrollPosition = () => {
+			pinnedToEnd = isAtEnd();
+		};
+
+		const scrollToEnd = () => {
+			window.cancelAnimationFrame(animationFrame);
+			animationFrame = window.requestAnimationFrame(() => {
+				if (pinnedToEnd) {
+					node.scrollTop = node.scrollHeight;
+				}
+			});
+		};
+
+		const observer = new MutationObserver(scrollToEnd);
+		node.addEventListener('scroll', rememberScrollPosition, { passive: true });
+		observer.observe(node, { childList: true, subtree: true, characterData: true });
+		scrollToEnd();
+
+		return {
+			destroy() {
+				window.cancelAnimationFrame(animationFrame);
+				observer.disconnect();
+				node.removeEventListener('scroll', rememberScrollPosition);
+			}
 		};
 	}
 
@@ -2597,6 +2634,10 @@
 			return 'service-state-uncreated';
 		}
 
+		if (isExpectedServiceStop(service)) {
+			return 'service-state-uncreated';
+		}
+
 		return 'service-state-exited';
 	}
 
@@ -2626,6 +2667,10 @@
 		}
 
 		if (service.state === 'uncreated') {
+			return 'state-chip-uncreated';
+		}
+
+		if (isExpectedServiceStop(service)) {
 			return 'state-chip-uncreated';
 		}
 
@@ -2668,9 +2713,13 @@
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
-	function projectServiceSnapshot(projectId: string, serviceNames?: string[]) {
+	function projectServiceSnapshot(projectId: string, serviceNames?: string[], serviceId?: string) {
 		return [...servicesCollection.state.values()].filter((service) => {
 			if (service.projectId !== projectId) {
+				return false;
+			}
+
+			if (serviceId && service.id !== serviceId) {
 				return false;
 			}
 
@@ -2696,14 +2745,15 @@
 	async function settleProjectServices(
 		projectId: string,
 		expected: 'running' | 'paused' | 'stopped',
-		serviceNames?: string[]
+		serviceNames?: string[],
+		serviceId?: string
 	) {
 		for (let attempt = 0; attempt < ACTION_SETTLE_ATTEMPTS; attempt += 1) {
 			invalidateProjectServices(projectId);
 			await reloadProjectServices([projectId]);
 			serviceQueryEpoch += 1;
 
-			const services = projectServiceSnapshot(projectId, serviceNames);
+			const services = projectServiceSnapshot(projectId, serviceNames, serviceId);
 
 			if (services.length && services.every((service) => serviceStateMatches(service, expected))) {
 				return;
@@ -2731,6 +2781,15 @@
 			hydrateProjects(result.projects, result.services);
 			syncWatchStreams(result.projects);
 			invalidateProjectServices();
+
+			const serviceProjectIds = [
+				...new Set([...expandedProjectIdList, selectedProjectId].filter(Boolean))
+			];
+
+			if (serviceProjectIds.length) {
+				await reloadProjectServices(serviceProjectIds);
+				serviceQueryEpoch += 1;
+			}
 
 			if (!options?.silent || uiState.status !== 'connected') {
 				setConnectionState('connected', 'Connected and synchronized.');
@@ -2760,7 +2819,12 @@
 		await refresh();
 
 		if (options?.settleState) {
-			await settleProjectServices(project.id, options.settleState, options.serviceNames);
+			await settleProjectServices(
+				project.id,
+				options.settleState,
+				options.serviceNames,
+				options.serviceId
+			);
 		} else {
 			invalidateProjectServices(project.id);
 			await reloadProjectServices([project.id]);
@@ -2813,19 +2877,16 @@
 				});
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (service) {
-				const startResult = await startProject(
-					uiState,
-					actionPaths[0],
-					project.watching,
-					serviceNames,
-					true
+				await startContainer(uiState, actionTarget(project, actionPaths[0]), service.containerId);
+				await syncAfterAction(
+					project,
+					`Started container ${service.containerName} in ${project.name}.`,
+					{
+						serviceNames,
+						serviceId: service.id,
+						settleState: 'running'
+					}
 				);
-				registerStartedBuild(project, startResult, service);
-				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up --build.`, {
-					serviceNames,
-					serviceId: service.id,
-					settleState: 'running'
-				});
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (project.state === 'uncreated') {
 				for (const path of actionPaths) {
@@ -3955,7 +4016,7 @@
 								</button>
 
 								{#if buildPanelOpen(build.id)}
-									<div class="build-output">
+									<div class="build-output" use:keepBuildOutputPinned>
 										{#if buildStreamErrors[build.id]}
 											<div class="config-output-state output-error" role="alert">
 												{buildStreamErrors[build.id]}
