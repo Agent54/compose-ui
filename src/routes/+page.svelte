@@ -22,7 +22,6 @@
 		executeProjectCommand,
 		type ComposeBuild,
 		killProjectProcess,
-		isExpectedServiceStop,
 		loadProjectConfig,
 		loadBuilds,
 		loadProjectProcesses,
@@ -2634,10 +2633,6 @@
 			return 'service-state-uncreated';
 		}
 
-		if (isExpectedServiceStop(service)) {
-			return 'service-state-uncreated';
-		}
-
 		return 'service-state-exited';
 	}
 
@@ -2667,10 +2662,6 @@
 		}
 
 		if (service.state === 'uncreated') {
-			return 'state-chip-uncreated';
-		}
-
-		if (isExpectedServiceStop(service)) {
 			return 'state-chip-uncreated';
 		}
 

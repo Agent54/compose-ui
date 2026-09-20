@@ -1,8 +1,6 @@
 import type { ComposeService } from './types';
 
-export function isExpectedServiceStop(
-	service: Pick<ComposeService, 'state' | 'stateText'>
-) {
+export function isExpectedServiceStop(service: Pick<ComposeService, 'state' | 'stateText'>) {
 	if (service.state !== 'exited') {
 		return false;
 	}
