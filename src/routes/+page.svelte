@@ -15,6 +15,7 @@
 	} from '$lib/central/output-stream';
 	import {
 		appendLog,
+		areProjectServicesStoppedWithoutError,
 		buildsCollection,
 		checkHealth,
 		composeLogsStreamUrl,
@@ -26,6 +27,7 @@
 		loadBuilds,
 		loadProjectProcesses,
 		loadProjectResources,
+		loadRuntimeStatus,
 		loadSystemDiskUsage,
 		loadSystemInfo,
 		type ComposeProcessSnapshot,
@@ -37,6 +39,7 @@
 		type ResourceLimits,
 		type ResourceUsage,
 		type ResourceUtilization,
+		type RuntimeStatus,
 		type UiState,
 		hydrateBuilds,
 		hydrateProjects,
@@ -193,6 +196,11 @@
 	const settings = $derived((settingsQuery.data?.[0] as LocalSettings | undefined) ?? undefined);
 	const expandedProjectIdList = $derived((settings?.expandedProjectIds ?? []).slice().sort());
 	const expandedProjectIds = $derived(new Set(expandedProjectIdList));
+	const sidebarServicesQuery = useLiveQuery(
+		(q) => q.from({ services: servicesCollection }),
+		[() => expandedProjectIdList.join('|'), () => serviceQueryEpoch]
+	);
+	const sidebarServices = $derived((sidebarServicesQuery.data ?? []) as ComposeService[]);
 	const sidebarWidth = $derived(dragSidebarWidth ?? settings?.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH);
 	const builds = $derived.by((): ComposeBuild[] => {
 		const entries = [...((buildsQuery.data ?? []) as ComposeBuild[])];
@@ -301,6 +309,7 @@
 	let processSnapshots = $state<ComposeProcessSnapshot[]>([]);
 	let systemInfo = $state<Record<string, unknown> | null>(null);
 	let systemDiskUsage = $state<Record<string, unknown> | null>(null);
+	let runtimeStatus = $state<RuntimeStatus | null>(null);
 	let projectResources = $state<ProjectResources | null>(null);
 	let pendingHashSelection = $state<HashSelection | null>(
 		browser ? parseSelectionHash(window.location.hash) : null
@@ -1671,9 +1680,10 @@
 			return;
 		}
 
-		const [nextSystemInfo, nextDiskUsage] = await Promise.allSettled([
+		const [nextSystemInfo, nextDiskUsage, nextRuntimeStatus] = await Promise.allSettled([
 			loadSystemInfo(ui),
-			loadSystemDiskUsage(ui)
+			loadSystemDiskUsage(ui),
+			loadRuntimeStatus(ui)
 		]);
 
 		if (nextSystemInfo.status === 'fulfilled') {
@@ -1682,6 +1692,10 @@
 
 		if (nextDiskUsage.status === 'fulfilled') {
 			systemDiskUsage = nextDiskUsage.value;
+		}
+
+		if (nextRuntimeStatus.status === 'fulfilled') {
+			runtimeStatus = nextRuntimeStatus.value;
 		}
 	}
 
@@ -2234,7 +2248,7 @@
 				label: 'CPU',
 				value: formatPercent(cpu),
 				hoverValue: formatCores(cpuCores),
-				tooltip: `${scope} CPU\n${formatPercent(cpu)}\nRaw: ${formatPercent(usage?.cpuPercent)}\nLimit: ${limits?.cpuCores ? `${limits.cpuCores} cores` : `${systemCpuCount() ?? 'unknown'} host CPUs`}`
+				tooltip: `${scope} CPU\n${formatPercent(cpu)}\nRaw: ${formatPercent(usage?.cpuPercent)}\nLimit: ${limits?.cpuCores ? `${limits.cpuCores} cores` : `${systemCpuCount() ?? 'unknown'} VM CPUs`}`
 			},
 			{
 				label: 'MEM',
@@ -2251,18 +2265,22 @@
 		];
 	}
 
-	function systemMetrics(): ResourceMetric[] {
+	function vmMetrics(): ResourceMetric[] {
 		const systemCandidates = recordCandidates(systemInfo, 'data', 'system', 'info', 'host');
 		const cpu = nestedNumberFromCandidates(systemCandidates, 'cpuPercent', 'CPUPercent', 'usage.cpuPercent', 'host.cpuPercent');
 		const cpuCount = systemCpuCount();
-		const memoryUsed = nestedNumberFromCandidates(
+		const containerMemoryUsed = nestedNumberFromCandidates(
 			systemCandidates,
 			'memoryUsedBytes',
 			'MemUsed',
 			'usage.memoryBytes',
 			'host.memoryUsedBytes'
 		);
-		const memoryTotal = systemMemoryBytes();
+		const memoryTotal = runtimeStatus?.memoryTotalBytes ?? systemMemoryBytes();
+		const memoryUsed =
+			runtimeStatus?.memoryAvailableBytes !== undefined && memoryTotal !== undefined
+				? Math.max(0, memoryTotal - runtimeStatus.memoryAvailableBytes)
+				: containerMemoryUsed;
 		const diskUsed = dockerDiskUsedBytes();
 		const diskTotal = systemDiskTotalBytes();
 
@@ -2271,7 +2289,7 @@
 				label: 'CPU',
 				value: cpu === undefined && cpuCount !== undefined ? String(cpuCount) : formatPercent(cpu),
 				hoverValue: cpuCount !== undefined ? `${cpuCount} CPU${cpuCount === 1 ? '' : 's'}` : formatPercent(cpu),
-				tooltip: `Docker host CPU\n${cpu === undefined ? 'Live CPU usage unavailable' : formatPercent(cpu)}\n${cpuCount ?? 'unknown'} CPUs`
+				tooltip: `All containers in the VM\n${cpu === undefined ? 'Live CPU usage unavailable' : formatPercent(cpu)} CPU\n${cpuCount ?? 'unknown'} VM CPUs`
 			},
 			{
 				label: 'MEM',
@@ -2283,7 +2301,9 @@
 					memoryUsed !== undefined && memoryTotal
 						? `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
 						: formatBytes(memoryTotal),
-				tooltip: `Docker host memory\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
+				tooltip: runtimeStatus?.memoryAvailableBytes !== undefined
+					? `Container VM memory\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
+					: `All containers in the VM\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)} memory`
 			},
 			{
 				label: 'HD',
@@ -2295,7 +2315,40 @@
 					diskUsed !== undefined && diskTotal
 						? `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
 						: formatBytes(diskUsed ?? diskTotal),
-				tooltip: `Docker disk usage\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
+				tooltip: `Docker data in the VM\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
+			}
+		];
+	}
+
+	function macMetrics(): ResourceMetric[] {
+		const resources = runtimeStatus?.hostResources;
+		const memory =
+			resources?.memoryUsedBytes !== undefined && resources.memoryTotalBytes
+				? (resources.memoryUsedBytes / resources.memoryTotalBytes) * 100
+				: undefined;
+		const disk =
+			resources?.diskUsedBytes !== undefined && resources.diskTotalBytes
+				? (resources.diskUsedBytes / resources.diskTotalBytes) * 100
+				: undefined;
+
+		return [
+			{
+				label: 'CPU',
+				value: formatPercent(resources?.cpuPercent),
+				hoverValue: resources ? `${resources.cpuCount} CPU${resources.cpuCount === 1 ? '' : 's'}` : '--',
+				tooltip: `Mac CPU\n${formatPercent(resources?.cpuPercent)}\n${resources?.cpuCount ?? 'unknown'} CPUs`
+			},
+			{
+				label: 'MEM',
+				value: formatPercent(memory),
+				hoverValue: `${formatBytes(resources?.memoryUsedBytes)} / ${formatBytes(resources?.memoryTotalBytes)}`,
+				tooltip: `Mac memory\n${formatBytes(resources?.memoryUsedBytes)} / ${formatBytes(resources?.memoryTotalBytes)}`
+			},
+			{
+				label: 'HD',
+				value: formatPercent(disk),
+				hoverValue: `${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
+				tooltip: `Mac disk\n${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`
 			}
 		];
 	}
@@ -2562,6 +2615,7 @@
 		if (latestBuildFailure(builds, project) && !projectStartButtonSpinning(project))
 			return 'project-icon-exited';
 		const aggregateState = projectAggregateState(project);
+		const projectServices = sidebarServices.filter((service) => service.projectId === project.id);
 
 		if (aggregateState === 'running') {
 			return 'project-icon-running';
@@ -2572,6 +2626,13 @@
 		}
 
 		if (aggregateState === 'uncreated') {
+			return 'project-icon-uncreated';
+		}
+
+		if (
+			aggregateState === 'exited' &&
+			areProjectServicesStoppedWithoutError(projectServices)
+		) {
 			return 'project-icon-uncreated';
 		}
 
@@ -3608,9 +3669,21 @@
 				<h2>{selectedProject?.name ?? 'Compose Projects'}</h2>
 			</div>
 			<div class="resource-strip" aria-label="Resource usage">
+				{#if runtimeStatus?.hostResources}
+					<div class="resource-group">
+						<span class="resource-group-label">Mac</span>
+						{#each macMetrics() as metric (`mac-${metric.label}`)}
+							<span class="resource-chip" data-tooltip={metric.tooltip}>
+								<span>{metric.label}</span>
+								<strong class="metric-value-default">{metric.value}</strong>
+								<strong class="metric-value-hover">{metric.hoverValue}</strong>
+							</span>
+						{/each}
+					</div>
+				{/if}
 				<div class="resource-group">
-					<span class="resource-group-label">Host</span>
-					{#each systemMetrics() as metric (`host-${metric.label}`)}
+					<span class="resource-group-label">VM</span>
+					{#each vmMetrics() as metric (`vm-${metric.label}`)}
 						<span class="resource-chip" data-tooltip={metric.tooltip}>
 							<span>{metric.label}</span>
 							<strong class="metric-value-default">{metric.value}</strong>

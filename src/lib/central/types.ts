@@ -151,6 +151,23 @@ export type ProjectResources = {
 	projectSummary?: ResourceProjectSummary;
 };
 
+export type HostResources = {
+	cpuPercent?: number;
+	cpuCount: number;
+	memoryUsedBytes?: number;
+	memoryTotalBytes: number;
+	diskUsedBytes?: number;
+	diskTotalBytes?: number;
+};
+
+export type RuntimeStatus = {
+	phase: string;
+	message: string;
+	memoryTotalBytes?: number;
+	memoryAvailableBytes?: number;
+	hostResources?: HostResources;
+};
+
 export type LogEntry = {
 	id: string;
 	projectId: string;

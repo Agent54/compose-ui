@@ -4,6 +4,7 @@ import type {
 	ComposeProject,
 	ComposeService,
 	ProjectResources,
+	RuntimeStatus,
 	UiState
 } from './types';
 
@@ -834,6 +835,20 @@ export async function loadSystemDiskUsage(ui: UiState): Promise<Record<string, u
 	}
 
 	return ((await response.json()) as Record<string, unknown> | null) ?? {};
+}
+
+export async function loadRuntimeStatus(ui: UiState): Promise<RuntimeStatus> {
+	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/runtime-status'), {
+		headers: {
+			accept: 'application/json'
+		}
+	});
+
+	if (!response.ok) {
+		throw await responseError('Loading /runtime-status', response);
+	}
+
+	return (await response.json()) as RuntimeStatus;
 }
 
 export async function loadProjectResources(
