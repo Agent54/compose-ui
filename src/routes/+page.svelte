@@ -2170,12 +2170,6 @@
 		return used !== undefined && limit ? (used / limit) * 100 : undefined;
 	}
 
-	function usageDiskPercent(usage: ResourceUsage | undefined) {
-		const used = (usage?.blockReadBytes ?? 0) + (usage?.blockWriteBytes ?? 0);
-		const total = systemDiskTotalBytes();
-		return used && total ? (used / total) * 100 : undefined;
-	}
-
 	function usageHasNumbers(usage: ResourceUsage | undefined) {
 		return Boolean(usage && Object.values(usage).some((value) => typeof value === 'number' && Number.isFinite(value)));
 	}
@@ -2250,7 +2244,6 @@
 	): ResourceMetric[] {
 		const cpu = usageCpuPercent(usage, utilization, limits);
 		const memory = usageMemoryPercent(usage, utilization, limits);
-		const disk = usageDiskPercent(usage);
 		const diskBytes = usage ? (usage.blockReadBytes ?? 0) + (usage.blockWriteBytes ?? 0) : undefined;
 		const cpuCores = usage?.cpuPercent !== undefined ? usage.cpuPercent / 100 : undefined;
 		const memoryLimit = limits?.memoryBytes || usage?.memoryLimitBytes || systemMemoryBytes();
@@ -2265,20 +2258,16 @@
 			},
 			{
 				label: 'MEM',
-				value: `${formatBytes(usage?.memoryBytes)} / ${formatBytes(memoryLimit)}`,
-				hoverValue: formatPercent(memory),
+				value: memory === undefined ? formatBytes(usage?.memoryBytes) : formatPercent(memory),
+				hoverValue: `${formatBytes(usage?.memoryBytes)} / ${formatBytes(memoryLimit)}`,
 				tooltip: `${scope} memory\n${formatBytes(usage?.memoryBytes)} / ${formatBytes(memoryLimit)}`,
 				percent: memory
 			},
 			{
 				label: 'HD',
-				value:
-					diskBytes === undefined
-						? formatBytes(diskBytes)
-						: `${formatBytes(usage?.blockReadBytes)} R / ${formatBytes(usage?.blockWriteBytes)} W`,
-				hoverValue: formatPercent(disk),
-				tooltip: `${scope} disk I/O\nRead ${formatBytes(usage?.blockReadBytes)}\nWrite ${formatBytes(usage?.blockWriteBytes)}`,
-				percent: disk
+				value: formatBytes(diskBytes),
+				hoverValue: `${formatBytes(usage?.blockReadBytes)} R / ${formatBytes(usage?.blockWriteBytes)} W`,
+				tooltip: `${scope} disk I/O\nNo capacity limit configured\nRead ${formatBytes(usage?.blockReadBytes)}\nWrite ${formatBytes(usage?.blockWriteBytes)}`
 			}
 		];
 	}
@@ -2316,10 +2305,8 @@
 			{
 				label: 'MEM',
 				value:
-					memoryUsed !== undefined && memoryTotal
-						? `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
-						: formatBytes(memoryTotal),
-				hoverValue: formatPercent(memory),
+					memory === undefined ? formatBytes(memoryUsed ?? memoryTotal) : formatPercent(memory),
+				hoverValue: `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`,
 				tooltip: runtimeStatus?.memoryAvailableBytes !== undefined
 					? `Container VM memory\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
 					: `All containers in the VM\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)} memory`,
@@ -2327,11 +2314,8 @@
 			},
 			{
 				label: 'HD',
-				value:
-					diskUsed !== undefined && diskTotal
-						? `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`
-						: formatBytes(diskUsed ?? diskTotal),
-				hoverValue: formatPercent(disk),
+				value: disk === undefined ? formatBytes(diskUsed ?? diskTotal) : formatPercent(disk),
+				hoverValue: `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`,
 				tooltip: `Docker data in the VM\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`,
 				percent: disk
 			}
@@ -2359,15 +2343,21 @@
 			},
 			{
 				label: 'MEM',
-				value: `${formatBytes(resources?.memoryUsedBytes)} / ${formatBytes(resources?.memoryTotalBytes)}`,
-				hoverValue: formatPercent(memory),
+				value:
+					memory === undefined
+						? formatBytes(resources?.memoryUsedBytes ?? resources?.memoryTotalBytes)
+						: formatPercent(memory),
+				hoverValue: `${formatBytes(resources?.memoryUsedBytes)} / ${formatBytes(resources?.memoryTotalBytes)}`,
 				tooltip: `Mac memory\n${formatBytes(resources?.memoryUsedBytes)} / ${formatBytes(resources?.memoryTotalBytes)}`,
 				percent: memory
 			},
 			{
 				label: 'HD',
-				value: `${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
-				hoverValue: formatPercent(disk),
+				value:
+					disk === undefined
+						? formatBytes(resources?.diskUsedBytes ?? resources?.diskTotalBytes)
+						: formatPercent(disk),
+				hoverValue: `${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
 				tooltip: `Mac disk\n${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
 				percent: disk
 			}
