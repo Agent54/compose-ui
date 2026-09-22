@@ -145,6 +145,7 @@
 	function startButtonSpinning(service: ComposeService) {
 		return (
 			buildingServiceId === service.id ||
+			busyAction === `stop:${project.id}:project` ||
 			busyAction === `stop:${project.id}:${service.id}` ||
 			busyAction === `start:${project.id}:${service.id}` ||
 			busyAction === `up-no-build:${project.id}:${service.id}` ||
@@ -159,7 +160,10 @@
 			return 'restarting';
 		}
 
-		if (busyAction === `stop:${project.id}:${service.id}`) {
+		if (
+			busyAction === `stop:${project.id}:project` ||
+			busyAction === `stop:${project.id}:${service.id}`
+		) {
 			return 'stopping';
 		}
 
