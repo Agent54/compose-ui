@@ -61,6 +61,14 @@ type ListedContainer = {
 	labels?: Record<string, string>;
 };
 
+type ListedComposePort = {
+	target?: unknown;
+	published?: unknown;
+	protocol?: unknown;
+	app_protocol?: unknown;
+	appProtocol?: unknown;
+};
+
 type RefreshResult = {
 	projects: ComposeProject[];
 	services: ComposeService[];
@@ -111,7 +119,10 @@ function joinUrl(serverUrl: string, version: string, path: string) {
 	return `${base}/v${normalizeVersion(version)}${path}`;
 }
 
-export function resolveBuildStreamUrl(ui: Pick<UiState, 'serverUrl' | 'apiVersion'>, streamUrl: string) {
+export function resolveBuildStreamUrl(
+	ui: Pick<UiState, 'serverUrl' | 'apiVersion'>,
+	streamUrl: string
+) {
 	const trimmed = streamUrl.trim();
 
 	if (!trimmed) {
@@ -244,7 +255,12 @@ function normalizeListedState(rawState: string, rawStatus: string) {
 		return 'exited' as const;
 	}
 
-	if (state === 'stopped' || state === 'stop' || status === 'stopped' || status.startsWith('stopped')) {
+	if (
+		state === 'stopped' ||
+		state === 'stop' ||
+		status === 'stopped' ||
+		status.startsWith('stopped')
+	) {
 		return 'stopped' as const;
 	}
 
@@ -358,7 +374,9 @@ function parseServiceState(rawState: string, rawStatus: string): ComposeService[
 }
 
 function parseHealth(raw: ListedContainer): ComposeService['health'] {
-	const health = String(raw.Health ?? raw.health ?? '').trim().toLowerCase();
+	const health = String(raw.Health ?? raw.health ?? '')
+		.trim()
+		.toLowerCase();
 
 	if (health === 'healthy' || health === 'unhealthy') {
 		return health;
@@ -378,9 +396,7 @@ function parseHealth(raw: ListedContainer): ComposeService['health'] {
 }
 
 function stripHealthSuffix(statusText: string) {
-	return statusText
-		.replace(/\s*\((healthy|unhealthy)\)\s*$/i, '')
-		.trim();
+	return statusText.replace(/\s*\((healthy|unhealthy)\)\s*$/i, '').trim();
 }
 
 function parseContainerName(raw: ListedContainer, fallback: string) {
@@ -426,17 +442,87 @@ function parseReplica(raw: ListedContainer) {
 }
 
 export function composeServiceUrl(
-	service: Pick<ComposeService, 'serviceName' | 'projectName' | 'replica'>
+	service: Pick<
+		ComposeService,
+		'serviceName' | 'projectName' | 'replica' | 'appProtocol' | 'publishedPort'
+	>
 ) {
 	const serviceName = service.serviceName.trim().toLowerCase();
 	const projectName = service.projectName.trim().toLowerCase();
 	const replica = Number(service.replica);
 	const replicaSuffix = Number.isInteger(replica) && replica > 1 ? `_${replica}` : '';
+	const hostname = `${serviceName}_${projectName}${replicaSuffix}.localhost`;
 
-	return `http://${serviceName}_${projectName}${replicaSuffix}.localhost:5196/`;
+	if (
+		service.appProtocol === 'https' &&
+		Number.isInteger(service.publishedPort) &&
+		Number(service.publishedPort) > 0 &&
+		Number(service.publishedPort) < 65536
+	) {
+		return `https://${hostname}:${service.publishedPort}/`;
+	}
+
+	return `http://${hostname}:5196/`;
 }
 
-function toService(raw: ListedContainer, project: ComposeProject, index: number): ComposeService {
+export function composeServiceRoute(
+	config: unknown,
+	serviceName: string
+): Pick<ComposeService, 'appProtocol' | 'publishedPort'> {
+	if (!config || typeof config !== 'object') {
+		return {};
+	}
+
+	const services = (config as { services?: unknown }).services;
+
+	if (!services || typeof services !== 'object') {
+		return {};
+	}
+
+	const service = (services as Record<string, unknown>)[serviceName];
+
+	if (!service || typeof service !== 'object') {
+		return {};
+	}
+
+	const ports = (service as { ports?: unknown }).ports;
+
+	if (!Array.isArray(ports)) {
+		return {};
+	}
+
+	const port = ports.find(
+		(candidate): candidate is ListedComposePort =>
+			Boolean(candidate) &&
+			typeof candidate === 'object' &&
+			String((candidate as ListedComposePort).protocol ?? 'tcp').toLowerCase() === 'tcp'
+	);
+
+	if (!port) {
+		return {};
+	}
+
+	const protocolValue = String(port.app_protocol ?? port.appProtocol ?? '')
+		.trim()
+		.toLowerCase();
+	const appProtocol: ComposeService['appProtocol'] =
+		protocolValue === 'http' || protocolValue === 'https' ? protocolValue : undefined;
+	const publishedPort = Number(port.published);
+
+	return {
+		...(appProtocol ? { appProtocol } : {}),
+		...(Number.isInteger(publishedPort) && publishedPort > 0 && publishedPort < 65536
+			? { publishedPort }
+			: {})
+	};
+}
+
+function toService(
+	raw: ListedContainer,
+	project: ComposeProject,
+	index: number,
+	config?: unknown
+): ComposeService {
 	const serviceName = firstNonEmptyString(
 		raw.Service,
 		raw.service,
@@ -468,6 +554,7 @@ function toService(raw: ListedContainer, project: ComposeProject, index: number)
 		containerName,
 		replica: parseReplica(raw),
 		composePath: parseComposePath(raw),
+		...composeServiceRoute(config, serviceName),
 		state: parseServiceState(rawState, rawStatus),
 		stateText: stripHealthSuffix(rawStatus || rawState || 'unknown'),
 		health: parseHealth(raw)
@@ -582,7 +669,9 @@ function toProcessSnapshot(
 		serviceName: String(raw.Service ?? raw.service ?? containerName),
 		replica: raw.Replica ?? raw.replica,
 		titles: Array.isArray(raw.Titles ?? raw.titles) ? [...(raw.Titles ?? raw.titles ?? [])] : [],
-		processes: Array.isArray(raw.Processes ?? raw.processes) ? [...(raw.Processes ?? raw.processes ?? [])] : []
+		processes: Array.isArray(raw.Processes ?? raw.processes)
+			? [...(raw.Processes ?? raw.processes ?? [])]
+			: []
 	};
 }
 
@@ -594,11 +683,14 @@ export async function refreshProjectsFromServer(ui: UiState): Promise<RefreshRes
 		params.append('filter', `name=${ui.filter.trim()}`);
 	}
 
-	const response = await fetch(`${joinUrl(ui.serverUrl, ui.apiVersion, '/ls')}?${params.toString()}`, {
-		headers: {
-			accept: 'application/json'
+	const response = await fetch(
+		`${joinUrl(ui.serverUrl, ui.apiVersion, '/ls')}?${params.toString()}`,
+		{
+			headers: {
+				accept: 'application/json'
+			}
 		}
-	});
+	);
 
 	if (!response.ok) {
 		throw await responseError('Listing projects', response);
@@ -702,11 +794,7 @@ export async function startContainer(
 	containerId: string
 ) {
 	const response = await fetch(
-		joinUrl(
-			ui.serverUrl,
-			ui.apiVersion,
-			`/start/${encodeURIComponent(project.id)}/container`
-		),
+		joinUrl(ui.serverUrl, ui.apiVersion, `/start/${encodeURIComponent(project.id)}/container`),
 		{
 			method: 'POST',
 			headers: {
@@ -770,6 +858,9 @@ export async function loadProjectServices(
 ): Promise<ComposeService[]> {
 	const params = new URLSearchParams();
 	params.set('all', 'true');
+	const configPromise = loadProjectConfig(ui, project.id, project.path, 'json')
+		.then((config) => JSON.parse(config) as unknown)
+		.catch(() => undefined);
 
 	const response = await fetch(
 		`${joinUrl(ui.serverUrl, ui.apiVersion, `/ps/${project.id}`)}?${params.toString()}`,
@@ -785,10 +876,11 @@ export async function loadProjectServices(
 	}
 
 	const payload = (await response.json()) as unknown;
+	const config = await configPromise;
 	return [
 		...new Map(
 			parseServices(payload)
-				.map((service, index) => toService(service, project as ComposeProject, index))
+				.map((service, index) => toService(service, project as ComposeProject, index, config))
 				.map((service) => [service.id, service] as const)
 		).values()
 	];
@@ -894,10 +986,12 @@ export async function loadProjectResources(
 		throw await responseError(`Loading /resources for ${projectName}`, response);
 	}
 
-	return ((await response.json()) as ProjectResources | null) ?? {
-		project: projectName,
-		granularity: options?.granularity ?? 'all'
-	};
+	return (
+		((await response.json()) as ProjectResources | null) ?? {
+			project: projectName,
+			granularity: options?.granularity ?? 'all'
+		}
+	);
 }
 
 export async function executeProjectCommand(
@@ -920,13 +1014,16 @@ export async function executeProjectCommand(
 	}
 ) {
 	const projectName = project.name || project.id;
-	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, `/exec/${encodeURIComponent(projectName)}`), {
-		method: 'POST',
-		headers: {
-			'content-type': 'application/json'
-		},
-		body: JSON.stringify(body)
-	});
+	const response = await fetch(
+		joinUrl(ui.serverUrl, ui.apiVersion, `/exec/${encodeURIComponent(projectName)}`),
+		{
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json'
+			},
+			body: JSON.stringify(body)
+		}
+	);
 
 	if (!response.ok) {
 		throw await responseError(`Starting /exec for ${projectName}`, response);

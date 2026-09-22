@@ -49,6 +49,8 @@ export type ComposeService = {
 	containerName: string;
 	replica?: string;
 	composePath?: string;
+	appProtocol?: 'http' | 'https';
+	publishedPort?: number;
 	state: 'running' | 'exited' | 'paused' | 'created' | 'uncreated' | 'unknown';
 	stateText: string;
 	health?: 'healthy' | 'unhealthy';
