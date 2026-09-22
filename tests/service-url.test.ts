@@ -5,22 +5,22 @@ import { composeServiceRoute, composeServiceUrl } from '../src/lib/central/api.t
 test('service URLs are project-qualified to avoid ambiguous Compose service names', () => {
 	assert.equal(
 		composeServiceUrl({ serviceName: 'web', projectName: 'demo' }),
-		'http://web_demo.localhost:5196/'
+		'http://web_demo.localhost/'
 	);
 });
 
 test('service URLs preserve the Compose replica suffix for scaled services', () => {
 	assert.equal(
 		composeServiceUrl({ serviceName: 'web', projectName: 'demo', replica: '2' }),
-		'http://web_demo_2.localhost:5196/'
+		'http://web_demo_2.localhost/'
 	);
 	assert.equal(
 		composeServiceUrl({ serviceName: 'WEB', projectName: 'DEMO', replica: '1' }),
-		'http://web_demo.localhost:5196/'
+		'http://web_demo.localhost/'
 	);
 });
 
-test('HTTPS service URLs use the published port declared by Compose', () => {
+test('HTTPS service URLs use the shared TLS port', () => {
 	const route = composeServiceRoute(
 		{
 			services: {
@@ -43,6 +43,6 @@ test('HTTPS service URLs use the published port declared by Compose', () => {
 	assert.deepEqual(route, { appProtocol: 'https', publishedPort: 5194 });
 	assert.equal(
 		composeServiceUrl({ serviceName: 'darc', projectName: 'darc', ...route }),
-		'https://darc_darc.localhost:5194/'
+		'https://darc_darc.localhost/'
 	);
 });

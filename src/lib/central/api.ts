@@ -442,10 +442,8 @@ function parseReplica(raw: ListedContainer) {
 }
 
 export function composeServiceUrl(
-	service: Pick<
-		ComposeService,
-		'serviceName' | 'projectName' | 'replica' | 'appProtocol' | 'publishedPort'
-	>
+	service: Pick<ComposeService, 'serviceName' | 'projectName'> &
+		Partial<Pick<ComposeService, 'replica' | 'appProtocol'>>
 ) {
 	const serviceName = service.serviceName.trim().toLowerCase();
 	const projectName = service.projectName.trim().toLowerCase();
@@ -453,22 +451,13 @@ export function composeServiceUrl(
 	const replicaSuffix = Number.isInteger(replica) && replica > 1 ? `_${replica}` : '';
 	const hostname = `${serviceName}_${projectName}${replicaSuffix}.localhost`;
 
-	if (
-		service.appProtocol === 'https' &&
-		Number.isInteger(service.publishedPort) &&
-		Number(service.publishedPort) > 0 &&
-		Number(service.publishedPort) < 65536
-	) {
-		return `https://${hostname}:${service.publishedPort}/`;
-	}
-
-	return `http://${hostname}:5196/`;
+	return `${service.appProtocol === 'https' ? 'https' : 'http'}://${hostname}/`;
 }
 
 export function composeServiceRoute(
 	config: unknown,
 	serviceName: string
-): Pick<ComposeService, 'appProtocol' | 'publishedPort'> {
+): Partial<Pick<ComposeService, 'appProtocol' | 'publishedPort'>> {
 	if (!config || typeof config !== 'object') {
 		return {};
 	}
