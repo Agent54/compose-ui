@@ -139,7 +139,6 @@
 	type ResourceMetric = {
 		label: string;
 		value: string;
-		hoverValue: string;
 		tooltip: string;
 		percent?: number;
 	};
@@ -2252,21 +2251,18 @@
 			{
 				label: 'CPU',
 				value: formatPercent(cpu),
-				hoverValue: formatCores(cpuCores),
-				tooltip: `${scope} CPU\n${formatPercent(cpu)}\nRaw: ${formatPercent(usage?.cpuPercent)}\nLimit: ${limits?.cpuCores ? `${limits.cpuCores} cores` : `${systemCpuCount() ?? 'unknown'} VM CPUs`}`,
+				tooltip: `${scope} CPU\n${formatPercent(cpu)}\nUsage: ${formatCores(cpuCores)}\nRaw: ${formatPercent(usage?.cpuPercent)}\nLimit: ${limits?.cpuCores ? `${limits.cpuCores} cores` : `${systemCpuCount() ?? 'unknown'} VM CPUs`}`,
 				percent: cpu
 			},
 			{
 				label: 'MEM',
 				value: memory === undefined ? formatBytes(usage?.memoryBytes) : formatPercent(memory),
-				hoverValue: `${formatBytes(usage?.memoryBytes)} / ${formatBytes(memoryLimit)}`,
 				tooltip: `${scope} memory\n${formatBytes(usage?.memoryBytes)} / ${formatBytes(memoryLimit)}`,
 				percent: memory
 			},
 			{
 				label: 'HD',
 				value: formatBytes(diskBytes),
-				hoverValue: `${formatBytes(usage?.blockReadBytes)} R / ${formatBytes(usage?.blockWriteBytes)} W`,
 				tooltip: `${scope} disk I/O\nNo capacity limit configured\nRead ${formatBytes(usage?.blockReadBytes)}\nWrite ${formatBytes(usage?.blockWriteBytes)}`
 			}
 		];
@@ -2298,7 +2294,6 @@
 			{
 				label: 'CPU',
 				value: formatPercent(cpu),
-				hoverValue: cpuCount !== undefined ? `${cpuCount} CPU${cpuCount === 1 ? '' : 's'}` : formatPercent(cpu),
 				tooltip: `All containers in the VM\n${cpu === undefined ? 'Live CPU usage unavailable' : formatPercent(cpu)} CPU\n${cpuCount ?? 'unknown'} VM CPUs`,
 				percent: cpu
 			},
@@ -2306,7 +2301,6 @@
 				label: 'MEM',
 				value:
 					memory === undefined ? formatBytes(memoryUsed ?? memoryTotal) : formatPercent(memory),
-				hoverValue: `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`,
 				tooltip: runtimeStatus?.memoryAvailableBytes !== undefined
 					? `Container VM memory\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
 					: `All containers in the VM\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)} memory`,
@@ -2315,7 +2309,6 @@
 			{
 				label: 'HD',
 				value: disk === undefined ? formatBytes(diskUsed ?? diskTotal) : formatPercent(disk),
-				hoverValue: `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`,
 				tooltip: `Docker data in the VM\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`,
 				percent: disk
 			}
@@ -2337,7 +2330,6 @@
 			{
 				label: 'CPU',
 				value: formatPercent(resources?.cpuPercent),
-				hoverValue: resources ? `${resources.cpuCount} CPU${resources.cpuCount === 1 ? '' : 's'}` : '--',
 				tooltip: `Mac CPU\n${formatPercent(resources?.cpuPercent)}\n${resources?.cpuCount ?? 'unknown'} CPUs`,
 				percent: resources?.cpuPercent
 			},
@@ -2347,7 +2339,6 @@
 					memory === undefined
 						? formatBytes(resources?.memoryUsedBytes ?? resources?.memoryTotalBytes)
 						: formatPercent(memory),
-				hoverValue: `${formatBytes(resources?.memoryUsedBytes)} / ${formatBytes(resources?.memoryTotalBytes)}`,
 				tooltip: `Mac memory\n${formatBytes(resources?.memoryUsedBytes)} / ${formatBytes(resources?.memoryTotalBytes)}`,
 				percent: memory
 			},
@@ -2357,7 +2348,6 @@
 					disk === undefined
 						? formatBytes(resources?.diskUsedBytes ?? resources?.diskTotalBytes)
 						: formatPercent(disk),
-				hoverValue: `${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
 				tooltip: `Mac disk\n${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
 				percent: disk
 			}
@@ -3690,8 +3680,7 @@
 								data-tooltip={resourceMetricTooltip(metric)}
 							>
 								<span>{metric.label}</span>
-								<strong class="metric-value-default">{metric.value}</strong>
-								<strong class="metric-value-hover">{metric.hoverValue}</strong>
+								<strong>{metric.value}</strong>
 							</span>
 						{/each}
 					</div>
@@ -3705,8 +3694,7 @@
 							data-tooltip={resourceMetricTooltip(metric)}
 						>
 							<span>{metric.label}</span>
-							<strong class="metric-value-default">{metric.value}</strong>
-							<strong class="metric-value-hover">{metric.hoverValue}</strong>
+							<strong>{metric.value}</strong>
 						</span>
 					{/each}
 				</div>
@@ -3720,8 +3708,7 @@
 								data-tooltip={resourceMetricTooltip(metric)}
 							>
 								<span>{metric.label}</span>
-								<strong class="metric-value-default">{metric.value}</strong>
-								<strong class="metric-value-hover">{metric.hoverValue}</strong>
+								<strong>{metric.value}</strong>
 							</span>
 						{/each}
 					</div>
@@ -5076,38 +5063,6 @@
 
 	.resource-chip[data-pressure='critical'] strong {
 		color: #f28a86;
-	}
-
-	.metric-value-hover {
-		position: absolute;
-		right: 0;
-		top: calc(100% + 0.35rem);
-		z-index: 45;
-		display: block;
-		width: max-content;
-		max-width: min(16rem, calc(100vw - 2rem));
-		padding: 0.34rem 0.48rem;
-		border: 1px solid var(--app-border-strong);
-		border-radius: 0.48rem;
-		background: var(--app-bg);
-		box-shadow: 0 14px 34px rgba(0, 0, 0, 0.68);
-		color: var(--app-text);
-		font-size: 0.72rem;
-		line-height: 1.15;
-		opacity: 0;
-		pointer-events: none;
-		transform: translateY(-2px);
-		visibility: hidden;
-		transition:
-			opacity 120ms ease,
-			transform 120ms ease,
-			visibility 120ms ease;
-	}
-
-	.resource-chip:hover .metric-value-hover {
-		opacity: 1;
-		transform: translateY(0);
-		visibility: visible;
 	}
 
 	.status-line {
