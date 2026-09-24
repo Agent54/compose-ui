@@ -3,7 +3,7 @@ import type { ComposeBuild, ComposeProject, ComposeService, LogEntry, UiState } 
 export const initialUiState: UiState[] = [
 	{
 		id: 'app',
-		serverUrl: 'http://127.0.0.1:8094',
+		serverUrl: '',
 		apiVersion: '1.24',
 		filter: '',
 		sortBy: 'status',
@@ -11,7 +11,7 @@ export const initialUiState: UiState[] = [
 		selectedProjectId: '',
 		selectedContainerId: '',
 		status: 'connecting',
-		statusDetail: 'Connecting to http://127.0.0.1:8094.'
+		statusDetail: 'Connecting to the local Compose service.'
 	}
 ];
 

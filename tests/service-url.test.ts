@@ -20,7 +20,7 @@ test('service URLs preserve the Compose replica suffix for scaled services', () 
 	);
 });
 
-test('HTTPS service URLs use the shared TLS port', () => {
+test('HTTPS services use the UI listener, with HTTP entrypoints redirected by the gateway', () => {
 	const route = composeServiceRoute(
 		{
 			services: {
@@ -43,6 +43,40 @@ test('HTTPS service URLs use the shared TLS port', () => {
 	assert.deepEqual(route, { appProtocol: 'https', publishedPort: 5194 });
 	assert.equal(
 		composeServiceUrl({ serviceName: 'darc', projectName: 'darc', ...route }),
-		'https://darc_darc.localhost/'
+		'http://darc_darc.localhost/'
 	);
+});
+
+test('service URLs use the same port as the Compose UI', () => {
+	const originalWindow = globalThis.window;
+	Object.defineProperty(globalThis, 'window', {
+		configurable: true,
+		value: { location: { protocol: 'http:', port: '5196' } }
+	});
+	try {
+		assert.equal(
+			composeServiceUrl({ serviceName: 'web', projectName: 'demo' }),
+			'http://web_demo.localhost:5196/'
+		);
+	} finally {
+		if (originalWindow === undefined) delete (globalThis as { window?: unknown }).window;
+		else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow });
+	}
+});
+
+test('HTTPS UI links use its port and the signed alias for HTTP services', () => {
+	const originalWindow = globalThis.window;
+	Object.defineProperty(globalThis, 'window', {
+		configurable: true,
+		value: { location: { protocol: 'https:', port: '5194' } }
+	});
+	try {
+		assert.equal(composeServiceUrl({ serviceName: 'web', projectName: 'demo' }),
+			'https://web_demo.app.localhost:5194/');
+		assert.equal(composeServiceUrl({ serviceName: 'darc', projectName: 'darc', appProtocol: 'https' }),
+			'https://darc_darc.localhost:5194/');
+	} finally {
+		if (originalWindow === undefined) delete (globalThis as { window?: unknown }).window;
+		else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow });
+	}
 });

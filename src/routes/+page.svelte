@@ -2835,7 +2835,7 @@
 
 		refreshing = true;
 		if (!options?.silent) {
-			setConnectionState('connecting', 'Connecting to http://127.0.0.1:8094.');
+			setConnectionState('connecting', 'Connecting to the local Compose service.');
 		}
 
 		try {
@@ -2860,7 +2860,7 @@
 
 		} catch (error) {
 			const message = errorMessage(error, 'Server unavailable');
-			setConnectionState('error', `Unavailable at http://127.0.0.1:8094. ${message}`);
+			setConnectionState('error', `Local Compose service unavailable. ${message}`);
 
 			if (!options?.silent && selectedProjectId) {
 				appendLog(selectedProjectId, 'error', `Unavailable. ${message}`);

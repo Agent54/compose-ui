@@ -449,9 +449,17 @@ export function composeServiceUrl(
 	const projectName = service.projectName.trim().toLowerCase();
 	const replica = Number(service.replica);
 	const replicaSuffix = Number.isInteger(replica) && replica > 1 ? `_${replica}` : '';
-	const hostname = `${serviceName}_${projectName}${replicaSuffix}.localhost`;
-
-	return `${service.appProtocol === 'https' ? 'https' : 'http'}://${hostname}/`;
+	const name = `${serviceName}_${projectName}${replicaSuffix}`;
+	// Workerd serves every local hostname on the UI's listener. On the HTTPS
+	// listener it terminates HTTP services and passes HTTPS services through.
+	const port = typeof window === 'undefined' ? '' : window.location.port;
+	const protocol = typeof window === 'undefined' ? 'http:' : window.location.protocol;
+	// A wildcard directly beneath .localhost does not verify locally. HTTP
+	// services therefore use the signed app.localhost alias on the HTTPS listener.
+	const hostname = protocol === 'https:' && service.appProtocol !== 'https'
+		? `${name}.app.localhost`
+		: `${name}.localhost`;
+	return `${protocol}//${hostname}${port ? `:${port}` : ''}/`;
 }
 
 export function composeServiceRoute(
