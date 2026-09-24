@@ -5012,7 +5012,7 @@
 		align-items: center;
 		justify-content: flex-end;
 		flex-wrap: wrap;
-		gap: 0.55rem;
+		gap: 0.55rem 1rem;
 		overflow: visible;
 	}
 
@@ -5021,7 +5021,7 @@
 		min-width: 0;
 		align-items: center;
 		flex-wrap: wrap;
-		gap: 0.28rem;
+		gap: 0.28rem 0.4rem;
 	}
 
 	.resource-group-label {
@@ -5029,6 +5029,7 @@
 		font-size: 0.64rem;
 		font-weight: 700;
 		text-transform: uppercase;
+		margin-right: 0.15rem;
 	}
 
 	.resource-chip {
