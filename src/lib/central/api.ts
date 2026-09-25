@@ -453,13 +453,13 @@ export function composeServiceUrl(
 	// Workerd serves every local hostname on the UI's listener. On the HTTPS
 	// listener it terminates HTTP services and passes HTTPS services through.
 	const port = typeof window === 'undefined' ? '' : window.location.port;
-	const protocol = typeof window === 'undefined' ? 'http:' : window.location.protocol;
+	const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
 	// A wildcard directly beneath .localhost does not verify locally. HTTP
 	// services therefore use the signed app.localhost alias on the HTTPS listener.
-	const hostname = protocol === 'https:' && service.appProtocol !== 'https'
-		? `${name}.app.localhost`
-		: `${name}.localhost`;
-	return `${protocol}//${hostname}${port ? `:${port}` : ''}/`;
+	const hostname =
+		isHttps && service.appProtocol !== 'https' ? `${name}.app.localhost` : `${name}.localhost`;
+	// A protocol-relative URL follows the UI's scheme, including when prerendered.
+	return `//${hostname}${port ? `:${port}` : ''}/`;
 }
 
 export function composeServiceRoute(

@@ -5,22 +5,27 @@ import { composeServiceRoute, composeServiceUrl } from '../src/lib/central/api.t
 test('service URLs are project-qualified to avoid ambiguous Compose service names', () => {
 	assert.equal(
 		composeServiceUrl({ serviceName: 'web', projectName: 'demo' }),
-		'http://web_demo.localhost/'
+		'//web_demo.localhost/'
+	);
+	assert.equal(
+		new URL(composeServiceUrl({ serviceName: 'web', projectName: 'demo' }), 'https://localhost/')
+			.href,
+		'https://web_demo.localhost/'
 	);
 });
 
 test('service URLs preserve the Compose replica suffix for scaled services', () => {
 	assert.equal(
 		composeServiceUrl({ serviceName: 'web', projectName: 'demo', replica: '2' }),
-		'http://web_demo_2.localhost/'
+		'//web_demo_2.localhost/'
 	);
 	assert.equal(
 		composeServiceUrl({ serviceName: 'WEB', projectName: 'DEMO', replica: '1' }),
-		'http://web_demo.localhost/'
+		'//web_demo.localhost/'
 	);
 });
 
-test('HTTPS services use the UI listener, with HTTP entrypoints redirected by the gateway', () => {
+test('HTTPS service route metadata does not override the UI protocol', () => {
 	const route = composeServiceRoute(
 		{
 			services: {
@@ -43,7 +48,7 @@ test('HTTPS services use the UI listener, with HTTP entrypoints redirected by th
 	assert.deepEqual(route, { appProtocol: 'https', publishedPort: 5194 });
 	assert.equal(
 		composeServiceUrl({ serviceName: 'darc', projectName: 'darc', ...route }),
-		'http://darc_darc.localhost/'
+		'//darc_darc.localhost/'
 	);
 });
 
@@ -55,7 +60,10 @@ test('service URLs use the same port as the Compose UI', () => {
 	});
 	try {
 		assert.equal(
-			composeServiceUrl({ serviceName: 'web', projectName: 'demo' }),
+			new URL(
+				composeServiceUrl({ serviceName: 'web', projectName: 'demo' }),
+				'http://localhost:5196/'
+			).href,
 			'http://web_demo.localhost:5196/'
 		);
 	} finally {
@@ -71,10 +79,20 @@ test('HTTPS UI links use its port and the signed alias for HTTP services', () =>
 		value: { location: { protocol: 'https:', port: '5194' } }
 	});
 	try {
-		assert.equal(composeServiceUrl({ serviceName: 'web', projectName: 'demo' }),
-			'https://web_demo.app.localhost:5194/');
-		assert.equal(composeServiceUrl({ serviceName: 'darc', projectName: 'darc', appProtocol: 'https' }),
-			'https://darc_darc.localhost:5194/');
+		assert.equal(
+			new URL(
+				composeServiceUrl({ serviceName: 'web', projectName: 'demo' }),
+				'https://localhost:5194/'
+			).href,
+			'https://web_demo.app.localhost:5194/'
+		);
+		assert.equal(
+			new URL(
+				composeServiceUrl({ serviceName: 'darc', projectName: 'darc', appProtocol: 'https' }),
+				'https://localhost:5194/'
+			).href,
+			'https://darc_darc.localhost:5194/'
+		);
 	} finally {
 		if (originalWindow === undefined) delete (globalThis as { window?: unknown }).window;
 		else Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow });
