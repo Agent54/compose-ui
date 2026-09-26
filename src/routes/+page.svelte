@@ -2315,7 +2315,7 @@
 		];
 	}
 
-	function macMetrics(): ResourceMetric[] {
+	function hostMetrics(): ResourceMetric[] {
 		const resources = runtimeStatus?.hostResources;
 		const memory =
 			resources?.memoryUsedBytes !== undefined && resources.memoryTotalBytes
@@ -2330,7 +2330,7 @@
 			{
 				label: 'CPU',
 				value: formatPercent(resources?.cpuPercent),
-				tooltip: `Mac CPU\n${formatPercent(resources?.cpuPercent)}\n${resources?.cpuCount ?? 'unknown'} CPUs`,
+				tooltip: `Host CPU\n${formatPercent(resources?.cpuPercent)}\n${resources?.cpuCount ?? 'unknown'} CPUs`,
 				percent: resources?.cpuPercent
 			},
 			{
@@ -2339,7 +2339,7 @@
 					memory === undefined
 						? formatBytes(resources?.memoryUsedBytes ?? resources?.memoryTotalBytes)
 						: formatPercent(memory),
-				tooltip: `Mac memory\n${formatBytes(resources?.memoryUsedBytes)} / ${formatBytes(resources?.memoryTotalBytes)}`,
+				tooltip: `Host memory\n${formatBytes(resources?.memoryUsedBytes)} / ${formatBytes(resources?.memoryTotalBytes)}`,
 				percent: memory
 			},
 			{
@@ -2348,7 +2348,7 @@
 					disk === undefined
 						? formatBytes(resources?.diskUsedBytes ?? resources?.diskTotalBytes)
 						: formatPercent(disk),
-				tooltip: `Mac disk\n${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
+				tooltip: `Host disk\n${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
 				percent: disk
 			}
 		];
@@ -3672,8 +3672,8 @@
 			<div class="resource-strip" aria-label="Resource usage">
 				{#if runtimeStatus?.hostResources}
 					<div class="resource-group">
-						<span class="resource-group-label">Mac</span>
-						{#each macMetrics() as metric (`mac-${metric.label}`)}
+						<span class="resource-group-label">Host</span>
+						{#each hostMetrics() as metric (`host-${metric.label}`)}
 							<span
 								class="resource-chip"
 								data-pressure={resourcePressure(metric.percent)}
