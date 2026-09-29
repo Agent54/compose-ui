@@ -13,7 +13,11 @@
 		readBuildOutput,
 		type OutputMessage
 	} from '$lib/central/output-stream';
-	import { resourcePressure } from '$lib/central/resource-state';
+	import {
+		memoryBuildFailures,
+		resourcePressure,
+		type ResourcePressure
+	} from '$lib/central/resource-state';
 	import {
 		appendLog,
 		areProjectServicesStoppedWithoutError,
@@ -141,6 +145,7 @@
 		value: string;
 		tooltip: string;
 		percent?: number;
+		pressure?: ResourcePressure;
 	};
 
 	type HashSelection = {
@@ -213,6 +218,7 @@
 	});
 
 	const allLogs = $derived((allLogsQuery.data ?? []) as LogEntry[]);
+	const memoryBuildFailure = $derived(memoryBuildFailures(builds, buildStreamEntries)[0]);
 
 	function stateRank(state: ComposeProject['state'] | ComposeService['state'] | 'mixed') {
 		if (state === 'running') return 0;
@@ -1756,12 +1762,13 @@
 			// Builds must still be discovered while a blocking /up request is pending.
 			void refreshBuildState();
 
-			if (!currentUi || currentUi.autoRefreshPaused || refreshing || busyAction) {
+			if (!currentUi || currentUi.autoRefreshPaused) {
 				return;
 			}
 
-			void refresh({ silent: true });
 			void refreshSystemResources();
+			if (refreshing || busyAction) return;
+			void refresh({ silent: true });
 			void refreshSelectedResources();
 		}, LS_POLL_INTERVAL_MS);
 
@@ -1991,6 +1998,20 @@
 		}
 
 		return `${metric.tooltip}\n${pressure === 'critical' ? 'Critical' : 'High'} utilization: ${formatPercent(metric.percent)}`;
+	}
+
+	async function showMemoryBuildFailure(build: ComposeBuild) {
+		const project = [...projectsCollection.state.values()].find(
+			(entry) => entry.id === build.projectId || entry.name === build.projectName
+		);
+		if (!project) return;
+		if (!visibleProjects.some((entry) => entry.id === project.id)) {
+			updateUiState({ filter: '' });
+		}
+		handleProjectSelect(project.id);
+		buildPanels = { ...buildPanels, [build.id]: true };
+		await tick();
+		document.getElementById(`build-${build.id}`)?.scrollIntoView({ block: 'start' });
 	}
 
 	function systemCpuCount() {
@@ -2311,7 +2332,18 @@
 				value: disk === undefined ? formatBytes(diskUsed ?? diskTotal) : formatPercent(disk),
 				tooltip: `Docker data in the VM\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`,
 				percent: disk
-			}
+			},
+			...((runtimeStatus?.oomKillCount ?? 0) > 0
+				? [
+						{
+							label: 'OOM',
+							value: String(runtimeStatus?.oomKillCount),
+							tooltip:
+								'VM out-of-memory kills since boot. This is a recorded event count, not current memory usage.',
+							pressure: 'warning' as const
+						}
+					]
+				: [])
 		];
 	}
 
@@ -3670,6 +3702,20 @@
 				<h2>{selectedProject?.name ?? 'Compose Projects'}</h2>
 			</div>
 			<div class="resource-strip" aria-label="Resource usage">
+				{#if memoryBuildFailure}
+					<button
+						class="resource-chip resource-failure"
+						type="button"
+						data-pressure="critical"
+						data-tooltip={`${memoryBuildFailure.message}\nOpen build output`}
+						onclick={() => void showMemoryBuildFailure(memoryBuildFailure.build)}
+					>
+						<strong
+							>{memoryBuildFailure.build.targetName || memoryBuildFailure.build.projectName}: Build
+							out of memory</strong
+						>
+					</button>
+				{/if}
 				{#if runtimeStatus?.hostResources}
 					<div class="resource-group">
 						<span class="resource-group-label">Host</span>
@@ -3690,7 +3736,7 @@
 					{#each vmMetrics() as metric (`vm-${metric.label}`)}
 						<span
 							class="resource-chip"
-							data-pressure={resourcePressure(metric.percent)}
+							data-pressure={metric.pressure ?? resourcePressure(metric.percent)}
 							data-tooltip={resourceMetricTooltip(metric)}
 						>
 							<span>{metric.label}</span>
@@ -4059,7 +4105,7 @@
 					<div class="build-list">
 						{#each selectedProjectBuilds as build (build.id)}
 							{@const entries = buildStreamEntriesForBuild(build.id)}
-							<div class="build-item">
+							<div class="build-item" id={`build-${build.id}`}>
 								<button
 									class="build-button"
 									type="button"
@@ -5036,6 +5082,13 @@
 	.resource-chip strong {
 		color: var(--app-text);
 		font-size: 0.7rem;
+	}
+
+	.resource-failure {
+		border: 1px solid #dc625f;
+		cursor: pointer;
+		white-space: normal;
+		text-align: left;
 	}
 
 	.resource-chip[data-pressure='warning']::before,

@@ -167,6 +167,7 @@ export type RuntimeStatus = {
 	message: string;
 	memoryTotalBytes?: number;
 	memoryAvailableBytes?: number;
+	oomKillCount?: number;
 	hostResources?: HostResources;
 };
 
