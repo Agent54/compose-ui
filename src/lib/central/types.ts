@@ -169,6 +169,16 @@ export type RuntimeStatus = {
 	memoryAvailableBytes?: number;
 	oomKillCount?: number;
 	hostResources?: HostResources;
+	vmResources?: VMResources;
+};
+
+export type VMResources = {
+	memoryResidentBytes?: number;
+	memoryLimitBytes?: number;
+	balloonTargetBytes?: number;
+	balloonInflatedBytes?: number;
+	diskAllocatedBytes?: number;
+	diskLogicalBytes?: number;
 };
 
 export type LogEntry = {

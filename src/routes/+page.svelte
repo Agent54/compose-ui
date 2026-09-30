@@ -7,6 +7,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
 	import { isReplacementBuild, latestBuildFailure, mergeBuilds } from '$lib/central/build-state';
+	import { vmHostMetrics } from '$lib/central/vm-resource-metrics';
 	import {
 		buildCompletion,
 		parseOutputMessage,
@@ -1681,29 +1682,25 @@
 	}
 
 	async function refreshSystemResources() {
+		await uiStateCollection.preload();
 		const ui = uiStateCollection.state.get('app');
 
-		if (!ui) {
+		if (!ui || disposed) {
 			return;
 		}
 
-		const [nextSystemInfo, nextDiskUsage, nextRuntimeStatus] = await Promise.allSettled([
-			loadSystemInfo(ui),
-			loadSystemDiskUsage(ui),
-			loadRuntimeStatus(ui)
+		// Publish each response immediately; Docker disk usage can be slow at startup.
+		await Promise.allSettled([
+			loadSystemInfo(ui).then((info) => {
+				if (!disposed) systemInfo = info;
+			}),
+			loadSystemDiskUsage(ui).then((usage) => {
+				if (!disposed) systemDiskUsage = usage;
+			}),
+			loadRuntimeStatus(ui).then((status) => {
+				if (!disposed) runtimeStatus = status;
+			})
 		]);
-
-		if (nextSystemInfo.status === 'fulfilled') {
-			systemInfo = nextSystemInfo.value;
-		}
-
-		if (nextDiskUsage.status === 'fulfilled') {
-			systemDiskUsage = nextDiskUsage.value;
-		}
-
-		if (nextRuntimeStatus.status === 'fulfilled') {
-			runtimeStatus = nextRuntimeStatus.value;
-		}
 	}
 
 	async function refreshSelectedResources() {
@@ -1962,12 +1959,12 @@
 	}
 
 	function formatPercent(value: number | undefined) {
-		return value === undefined ? '--' : `${Math.max(0, value).toFixed(value >= 10 ? 0 : 1)}%`;
+		return value === undefined ? '...' : `${Math.max(0, value).toFixed(value >= 10 ? 0 : 1)}%`;
 	}
 
 	function formatCores(value: number | undefined) {
 		if (value === undefined) {
-			return '--';
+			return '...';
 		}
 
 		return `${Math.max(0, value).toFixed(value >= 10 ? 0 : 2)} cores`;
@@ -1975,7 +1972,7 @@
 
 	function formatBytes(value: number | undefined) {
 		if (value === undefined) {
-			return 'unknown';
+			return '...';
 		}
 
 		const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -2333,6 +2330,7 @@
 				tooltip: `Docker data in the VM\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`,
 				percent: disk
 			},
+			...vmHostMetrics(runtimeStatus?.vmResources, formatBytes),
 			...((runtimeStatus?.oomKillCount ?? 0) > 0
 				? [
 						{
@@ -3716,7 +3714,7 @@
 						>
 					</button>
 				{/if}
-				{#if runtimeStatus?.hostResources}
+				{#if runtimeStatus === null || runtimeStatus.hostResources}
 					<div class="resource-group">
 						<span class="resource-group-label">Host</span>
 						{#each hostMetrics() as metric (`host-${metric.label}`)}
