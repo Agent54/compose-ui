@@ -912,20 +912,6 @@ export async function loadSystemInfo(ui: UiState): Promise<Record<string, unknow
 	return ((await response.json()) as Record<string, unknown> | null) ?? {};
 }
 
-export async function loadSystemDiskUsage(ui: UiState): Promise<Record<string, unknown>> {
-	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/system/df'), {
-		headers: {
-			accept: 'application/json'
-		}
-	});
-
-	if (!response.ok) {
-		throw await responseError('Loading /system/df', response);
-	}
-
-	return ((await response.json()) as Record<string, unknown> | null) ?? {};
-}
-
 export async function loadRuntimeStatus(ui: UiState): Promise<RuntimeStatus> {
 	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/runtime-status'), {
 		headers: {

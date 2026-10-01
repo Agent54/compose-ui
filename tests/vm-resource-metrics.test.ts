@@ -6,12 +6,15 @@ import { vmHostMetrics } from '../src/lib/central/vm-resource-metrics.ts';
 const formatBytes = (value: number | undefined) => (value === undefined ? '—' : `${value} B`);
 
 test('old runtime responses and unavailable samples do not invent zero usage', () => {
-	assert.deepEqual(vmHostMetrics(undefined, formatBytes), []);
-	assert.deepEqual(vmHostMetrics({}, formatBytes), []);
-	assert.deepEqual(
-		vmHostMetrics({ memoryLimitBytes: 8192, diskLogicalBytes: 30000 }, formatBytes),
-		[]
-	);
+	for (const resources of [undefined, {}, { memoryLimitBytes: 8192, diskLogicalBytes: 30000 }]) {
+		assert.deepEqual(vmHostMetrics(resources, formatBytes), [
+			{
+				label: 'IMAGE',
+				value: '—',
+				tooltip: 'VM disk image allocation unavailable'
+			}
+		]);
+	}
 });
 
 test('zero balloon inflation remains visible alongside resident RAM and sparse allocation', () => {

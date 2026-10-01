@@ -34,7 +34,6 @@
 		loadProjectProcesses,
 		loadProjectResources,
 		loadRuntimeStatus,
-		loadSystemDiskUsage,
 		loadSystemInfo,
 		type ComposeProcessSnapshot,
 		type ComposeProject,
@@ -316,7 +315,7 @@
 	let topError = $state('');
 	let processSnapshots = $state<ComposeProcessSnapshot[]>([]);
 	let systemInfo = $state<Record<string, unknown> | null>(null);
-	let systemDiskUsage = $state<Record<string, unknown> | null>(null);
+	let systemResourcesRefreshing = false;
 	let runtimeStatus = $state<RuntimeStatus | null>(null);
 	let projectResources = $state<ProjectResources | null>(null);
 	let pendingHashSelection = $state<HashSelection | null>(
@@ -1685,22 +1684,24 @@
 		await uiStateCollection.preload();
 		const ui = uiStateCollection.state.get('app');
 
-		if (!ui || disposed) {
+		if (!ui || disposed || systemResourcesRefreshing) {
 			return;
 		}
 
-		// Publish each response immediately; Docker disk usage can be slow at startup.
-		await Promise.allSettled([
-			loadSystemInfo(ui).then((info) => {
-				if (!disposed) systemInfo = info;
-			}),
-			loadSystemDiskUsage(ui).then((usage) => {
-				if (!disposed) systemDiskUsage = usage;
-			}),
-			loadRuntimeStatus(ui).then((status) => {
-				if (!disposed) runtimeStatus = status;
-			})
-		]);
+		systemResourcesRefreshing = true;
+		try {
+			// Use exposed counters only. Docker /system/df walks container filesystems.
+			await Promise.allSettled([
+				loadSystemInfo(ui).then((info) => {
+					if (!disposed) systemInfo = info;
+				}),
+				loadRuntimeStatus(ui).then((status) => {
+					if (!disposed) runtimeStatus = status;
+				})
+			]);
+		} finally {
+			systemResourcesRefreshing = false;
+		}
 	}
 
 	async function refreshSelectedResources() {
@@ -2037,122 +2038,6 @@
 		);
 	}
 
-	function dockerDiskUsedBytes() {
-		const candidates = recordCandidates(systemDiskUsage, 'data', 'df', 'diskUsage', 'usage');
-		const imagesSize = nestedNumberFromCandidates(candidates, 'LayersSize', 'layersSize');
-		const explicit = nestedNumberFromCandidates(
-			candidates,
-			'usedBytes',
-			'UsedBytes',
-			'totalUsageBytes',
-			'TotalUsageBytes',
-			'size',
-			'Size',
-			'usage.size',
-			'usage.usedBytes'
-		);
-
-		if (explicit !== undefined) {
-			return explicit;
-		}
-
-		const lists = [
-			...(imagesSize === undefined ? ['Images', 'images'] : []),
-			'Containers',
-			'containers',
-			'Volumes',
-			'volumes',
-			'BuildCache',
-			'buildCache'
-		];
-		let total = imagesSize ?? 0;
-
-		for (const key of lists) {
-			for (const candidate of candidates) {
-				const items = candidate[key];
-
-				if (!Array.isArray(items)) {
-					continue;
-				}
-
-				for (const item of items as Record<string, unknown>[]) {
-					total +=
-						numberValue(
-							item.Size,
-							item.size,
-							item.SizeRootFs,
-							item.sizeRootFs,
-							item.Reclaimable,
-							item.reclaimable,
-							(item.UsageData as Record<string, unknown> | undefined)?.Size,
-							(item.usageData as Record<string, unknown> | undefined)?.size
-						) ??
-						parseByteString(item.Size) ??
-						parseByteString(item.size) ??
-						parseByteString(item.SizeRootFs) ??
-						parseByteString(item.sizeRootFs) ??
-						parseByteString(item.Reclaimable) ??
-						parseByteString(item.reclaimable) ??
-						0;
-				}
-			}
-		}
-
-		return total || undefined;
-	}
-
-	function systemDiskTotalBytes() {
-		const diskCandidates = recordCandidates(systemDiskUsage, 'data', 'df', 'diskUsage', 'usage');
-		const systemCandidates = recordCandidates(systemInfo, 'data', 'system', 'info', 'host');
-		const direct = nestedNumberFromCandidates(
-			diskCandidates,
-			'totalBytes',
-			'TotalBytes',
-			'diskTotalBytes',
-			'DockerRootDirTotalBytes',
-			'rootDirTotalBytes',
-			'usage.totalBytes',
-			'rootDir.totalBytes',
-			'rootDir.size',
-			'RootDirTotalBytes'
-		) ?? nestedNumberFromCandidates(
-			systemCandidates,
-			'totalBytes',
-			'TotalBytes',
-			'diskTotalBytes',
-			'DockerRootDirTotalBytes',
-			'rootDirTotalBytes',
-			'usage.totalBytes',
-			'rootDir.totalBytes',
-			'rootDir.size',
-			'RootDirTotalBytes'
-		);
-
-		if (direct !== undefined) {
-			return direct;
-		}
-
-		const driverStatus = systemInfo?.DriverStatus ?? systemInfo?.driverStatus;
-
-		if (Array.isArray(driverStatus)) {
-			for (const entry of driverStatus) {
-				if (!Array.isArray(entry) || entry.length < 2) {
-					continue;
-				}
-
-				if (String(entry[0]).toLowerCase().includes('total')) {
-					const value = parseByteString(entry[1]);
-
-					if (value !== undefined) {
-						return value;
-					}
-				}
-			}
-		}
-
-		return undefined;
-	}
-
 	function usageCpuPercent(usage: ResourceUsage | undefined, utilization: ResourceUtilization | undefined, limits: ResourceLimits | undefined) {
 		if (utilization?.cpuLimitPercent !== undefined) {
 			return utilization.cpuLimitPercent;
@@ -2302,11 +2187,8 @@
 			runtimeStatus?.memoryAvailableBytes !== undefined && memoryTotal !== undefined
 				? Math.max(0, memoryTotal - runtimeStatus.memoryAvailableBytes)
 				: containerMemoryUsed;
-		const diskUsed = dockerDiskUsedBytes();
-		const diskTotal = systemDiskTotalBytes();
 		const memory =
 			memoryUsed !== undefined && memoryTotal ? (memoryUsed / memoryTotal) * 100 : undefined;
-		const disk = diskUsed !== undefined && diskTotal ? (diskUsed / diskTotal) * 100 : undefined;
 
 		return [
 			{
@@ -2323,12 +2205,6 @@
 					? `Container VM memory\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
 					: `All containers in the VM\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)} memory`,
 				percent: memory
-			},
-			{
-				label: 'HD',
-				value: disk === undefined ? formatBytes(diskUsed ?? diskTotal) : formatPercent(disk),
-				tooltip: `Docker data in the VM\n${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`,
-				percent: disk
 			},
 			...vmHostMetrics(runtimeStatus?.vmResources, formatBytes),
 			...((runtimeStatus?.oomKillCount ?? 0) > 0
