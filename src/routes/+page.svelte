@@ -4933,7 +4933,7 @@
 
 	.resource-group-label {
 		margin-inline-start: 0.5rem;
-		color: var(--app-text-subtle);
+		color: color-mix(in srgb, var(--app-text-subtle) 90%, var(--app-bg));
 		font-size: 0.64rem;
 		font-weight: 700;
 		text-transform: uppercase;

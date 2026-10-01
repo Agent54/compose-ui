@@ -239,6 +239,32 @@ async function responseError(action: string, response: Response): Promise<Error>
 	return new Error(detail ? `${baseMessage}: ${detail}` : baseMessage);
 }
 
+// Bound snapshot reads, including their bodies. Builds, actions and live
+// streams have different lifetimes and must not use this deadline.
+async function readSnapshot<T>(
+	url: string,
+	action: string,
+	read: (response: Response) => Promise<T>,
+	accept = 'application/json'
+): Promise<T> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 5000);
+	try {
+		const response = await fetch(url, { headers: { accept }, signal: controller.signal });
+		if (!response.ok) throw await responseError(action, response);
+		return await read(response);
+	} catch (error) {
+		if (controller.signal.aborted) {
+			throw new Error(
+				`${action} timed out after 5 seconds. The container VM may be busy; try again shortly.`
+			);
+		}
+		throw error;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 function normalizeListedState(rawState: string, rawStatus: string) {
 	const state = rawState.trim().toLowerCase();
 	const status = rawStatus.trim().toLowerCase();
@@ -680,20 +706,11 @@ export async function refreshProjectsFromServer(ui: UiState): Promise<RefreshRes
 		params.append('filter', `name=${ui.filter.trim()}`);
 	}
 
-	const response = await fetch(
+	const payload = await readSnapshot(
 		`${joinUrl(ui.serverUrl, ui.apiVersion, '/ls')}?${params.toString()}`,
-		{
-			headers: {
-				accept: 'application/json'
-			}
-		}
+		'Listing projects',
+		(response) => response.json() as Promise<unknown>
 	);
-
-	if (!response.ok) {
-		throw await responseError('Listing projects', response);
-	}
-
-	const payload = (await response.json()) as unknown;
 	const projects = parseProjects(payload).map(toProject);
 
 	return {
@@ -703,16 +720,13 @@ export async function refreshProjectsFromServer(ui: UiState): Promise<RefreshRes
 }
 
 export async function checkHealth(ui: UiState) {
-	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/_ping'), {
-		method: 'GET',
-		headers: {
-			accept: 'application/json'
+	await readSnapshot(
+		joinUrl(ui.serverUrl, ui.apiVersion, '/_ping'),
+		'Checking /_ping',
+		async (response) => {
+			await response.body?.cancel();
 		}
-	});
-
-	if (!response.ok) {
-		throw await responseError('Checking /_ping', response);
-	}
+	);
 }
 
 export async function startProject(
@@ -859,20 +873,11 @@ export async function loadProjectServices(
 		.then((config) => JSON.parse(config) as unknown)
 		.catch(() => undefined);
 
-	const response = await fetch(
+	const payload = await readSnapshot(
 		`${joinUrl(ui.serverUrl, ui.apiVersion, `/ps/${project.id}`)}?${params.toString()}`,
-		{
-			headers: {
-				accept: 'application/json'
-			}
-		}
+		`Loading /ps for ${project.id}`,
+		(response) => response.json() as Promise<unknown>
 	);
-
-	if (!response.ok) {
-		throw await responseError(`Loading /ps for ${project.id}`, response);
-	}
-
-	const payload = (await response.json()) as unknown;
 	const config = await configPromise;
 	return [
 		...new Map(
@@ -884,46 +889,28 @@ export async function loadProjectServices(
 }
 
 export async function loadBuilds(ui: UiState): Promise<ComposeBuild[]> {
-	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/builds'), {
-		headers: {
-			accept: 'application/json'
-		}
-	});
-
-	if (!response.ok) {
-		throw await responseError('Loading /builds', response);
-	}
-
-	const payload = (await response.json()) as unknown;
+	const payload = await readSnapshot(
+		joinUrl(ui.serverUrl, ui.apiVersion, '/builds'),
+		'Loading /builds',
+		(response) => response.json() as Promise<unknown>
+	);
 	return parseBuilds(payload).map(toBuild);
 }
 
 export async function loadSystemInfo(ui: UiState): Promise<Record<string, unknown>> {
-	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/system'), {
-		headers: {
-			accept: 'application/json'
-		}
-	});
-
-	if (!response.ok) {
-		throw await responseError('Loading /system', response);
-	}
-
-	return ((await response.json()) as Record<string, unknown> | null) ?? {};
+	return await readSnapshot(
+		joinUrl(ui.serverUrl, ui.apiVersion, '/system'),
+		'Loading /system',
+		async (response) => ((await response.json()) as Record<string, unknown> | null) ?? {}
+	);
 }
 
 export async function loadRuntimeStatus(ui: UiState): Promise<RuntimeStatus> {
-	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/runtime-status'), {
-		headers: {
-			accept: 'application/json'
-		}
-	});
-
-	if (!response.ok) {
-		throw await responseError('Loading /runtime-status', response);
-	}
-
-	return (await response.json()) as RuntimeStatus;
+	return await readSnapshot(
+		joinUrl(ui.serverUrl, ui.apiVersion, '/runtime-status'),
+		'Loading /runtime-status',
+		(response) => response.json() as Promise<RuntimeStatus>
+	);
 }
 
 export async function loadProjectResources(
@@ -956,24 +943,14 @@ export async function loadProjectResources(
 
 	const query = params.toString();
 	const projectName = project.name || project.id;
-	const response = await fetch(
+	return await readSnapshot(
 		`${joinUrl(ui.serverUrl, ui.apiVersion, `/resources/${encodeURIComponent(projectName)}`)}${query ? `?${query}` : ''}`,
-		{
-			headers: {
-				accept: 'application/json'
+		`Loading /resources for ${projectName}`,
+		async (response) =>
+			((await response.json()) as ProjectResources | null) ?? {
+				project: projectName,
+				granularity: options?.granularity ?? 'all'
 			}
-		}
-	);
-
-	if (!response.ok) {
-		throw await responseError(`Loading /resources for ${projectName}`, response);
-	}
-
-	return (
-		((await response.json()) as ProjectResources | null) ?? {
-			project: projectName,
-			granularity: options?.granularity ?? 'all'
-		}
 	);
 }
 
@@ -1057,20 +1034,12 @@ export async function loadProjectConfig(
 	params.set('path', path);
 	params.set('format', format);
 
-	const response = await fetch(
+	return await readSnapshot(
 		`${joinUrl(ui.serverUrl, ui.apiVersion, `/config/${projectId}`)}?${params.toString()}`,
-		{
-			headers: {
-				accept: format === 'json' ? 'application/json' : 'application/yaml, text/yaml, text/plain'
-			}
-		}
+		`Loading /config for ${projectId}`,
+		(response) => response.text(),
+		format === 'json' ? 'application/json' : 'application/yaml, text/yaml, text/plain'
 	);
-
-	if (!response.ok) {
-		throw await responseError(`Loading /config for ${projectId}`, response);
-	}
-
-	return await response.text();
 }
 
 export async function loadProjectProcesses(
@@ -1080,19 +1049,10 @@ export async function loadProjectProcesses(
 	const params = new URLSearchParams();
 	params.set('all', 'true');
 
-	const response = await fetch(
+	const payload = await readSnapshot(
 		`${joinUrl(ui.serverUrl, ui.apiVersion, `/top/${project.id}`)}?${params.toString()}`,
-		{
-			headers: {
-				accept: 'application/json'
-			}
-		}
+		`Loading /top for ${project.id}`,
+		(response) => response.json() as Promise<unknown>
 	);
-
-	if (!response.ok) {
-		throw await responseError(`Loading /top for ${project.id}`, response);
-	}
-
-	const payload = (await response.json()) as unknown;
 	return parseProcessSnapshots(payload).map((entry) => toProcessSnapshot(entry, project));
 }
