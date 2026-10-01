@@ -79,7 +79,9 @@ test('a watch-stop failure prevents a competing stop mutation and preserves the 
 	globalThis.fetch = (_, init) => {
 		requests += 1;
 		assert.equal(init?.method, 'DELETE');
-		return Promise.resolve(Response.json({ message: 'Watch cancellation failed' }, { status: 500 }));
+		return Promise.resolve(
+			Response.json({ message: 'Watch cancellation failed' }, { status: 500 })
+		);
 	};
 
 	try {

@@ -850,10 +850,6 @@
 			return project.watching ? 'stopping watch' : 'enabling watch';
 		}
 
-		if (busyAction === `stop:${project.id}:project`) {
-			return 'stopping';
-		}
-
 		if (
 			busyAction === `start:${project.id}:project` ||
 			busyAction === `up-no-build:${project.id}:project`
@@ -868,10 +864,6 @@
 		}
 
 		const busyKind = busyActionKindForProject(project.id);
-
-		if (busyKind === 'stop') {
-			return 'stopping';
-		}
 
 		if (busyKind === 'remove') {
 			return 'removing';
@@ -3098,7 +3090,7 @@
 
 		try {
 			const actionPaths = actionComposePaths(project, service);
-			if (!actionPaths.length) {
+			if (nextWatching && !actionPaths.length) {
 				throw new Error(`No compose file path available for ${service?.serviceName ?? project.name}.`);
 			}
 
