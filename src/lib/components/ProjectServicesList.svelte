@@ -8,6 +8,7 @@
 	import {
 		composeServiceUrl,
 		isExpectedServiceStop,
+		isServiceRestarting,
 		servicesCollection,
 		type ComposeProject,
 		type ComposeService
@@ -38,7 +39,11 @@
 		onContainerSelect: (projectId: string, serviceId: string) => void;
 		onStartStop: (project: ComposeProject, service: ComposeService) => void;
 		onRestart: (project: ComposeProject, service: ComposeService) => void;
-		onOpenContextMenu: (event: MouseEvent, project: ComposeProject, service: ComposeService) => void;
+		onOpenContextMenu: (
+			event: MouseEvent,
+			project: ComposeProject,
+			service: ComposeService
+		) => void;
 		onPauseToggle: (project: ComposeProject, service: ComposeService) => void;
 		onWatchingToggle: (project: ComposeProject, service?: ComposeService) => void;
 	} = $props();
@@ -81,6 +86,7 @@
 	});
 
 	function serviceStateTone(service: ComposeService) {
+		if (isServiceRestarting(service, busyAction)) return 'service-state-exited';
 		if (latestBuildFailure(builds, project, service) && !startButtonSpinning(service))
 			return 'service-state-exited';
 		if (service.state === 'running') {
@@ -144,19 +150,19 @@
 
 	function startButtonSpinning(service: ComposeService) {
 		return (
+			isServiceRestarting(service, busyAction) ||
 			buildingServiceId === service.id ||
 			busyAction === `stop:${project.id}:project` ||
 			busyAction === `stop:${project.id}:${service.id}` ||
 			busyAction === `start:${project.id}:${service.id}` ||
 			busyAction === `up-no-build:${project.id}:${service.id}` ||
-			busyAction === `restart:${project.id}:${service.id}` ||
 			busyAction === `watching:${project.id}:${service.id}` ||
 			busyAction === `remove:${project.id}:${service.id}`
 		);
 	}
 
 	function servicePendingStatusLabel(service: ComposeService) {
-		if (busyAction === `restart:${project.id}:${service.id}`) {
+		if (isServiceRestarting(service, busyAction)) {
 			return 'restarting';
 		}
 
@@ -238,7 +244,10 @@
 							<span class="service-title-text">{service.serviceName}</span>
 						</span>
 						{#if shouldShowServiceStatus(service)}
-							<span class="service-status">
+							<span
+								class="service-status"
+								class:restarting-status={isServiceRestarting(service, busyAction)}
+							>
 								{serviceDisplayStatusLabel(service)}
 								{#if service.health && !servicePendingStatusLabel(service)}
 									<span class="health-tag">({service.health})</span>
@@ -273,12 +282,12 @@
 
 					<span
 						class="tooltip-anchor"
-						data-tooltip={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
+						data-tooltip={`${['running', 'paused', 'restarting'].includes(service.state) ? 'Stop' : 'Start'} ${service.serviceName}`}
 					>
 						<button
 							class="overlay-button"
 							type="button"
-							aria-label={`${service.state === 'running' || service.state === 'paused' ? 'Stop' : 'Start'} ${service.serviceName}`}
+							aria-label={`${['running', 'paused', 'restarting'].includes(service.state) ? 'Stop' : 'Start'} ${service.serviceName}`}
 							onmousedown={(event) => {
 								if (!isPrimaryMouse(event)) return;
 								onStartStop(project, service);
@@ -286,7 +295,11 @@
 							disabled={busyAction !== null}
 						>
 							<Icon
-								name={busyAction === `stop:${project.id}:${service.id}` ? 'refresh' : service.state === 'running' || service.state === 'paused' ? 'stop' : 'play'}
+								name={busyAction === `stop:${project.id}:${service.id}`
+									? 'refresh'
+									: ['running', 'paused', 'restarting'].includes(service.state)
+										? 'stop'
+										: 'play'}
 								size={13}
 								spinning={busyAction === `stop:${project.id}:${service.id}`}
 							/>
@@ -294,10 +307,7 @@
 					</span>
 
 					{#if service.state === 'running' || service.state === 'paused'}
-						<span
-							class="tooltip-anchor"
-							data-tooltip={`Restart ${service.serviceName}`}
-						>
+						<span class="tooltip-anchor" data-tooltip={`Restart ${service.serviceName}`}>
 							<button
 								class="overlay-button"
 								type="button"
@@ -318,10 +328,7 @@
 					{/if}
 
 					{#if service.state === 'paused'}
-						<span
-							class="tooltip-anchor"
-							data-tooltip={`Start ${service.serviceName}`}
-						>
+						<span class="tooltip-anchor" data-tooltip={`Start ${service.serviceName}`}>
 							<button
 								class="overlay-button"
 								type="button"
@@ -352,7 +359,11 @@
 							disabled={busyAction !== null}
 						>
 							<Icon
-								name={busyAction === `watching:${project.id}:${service.id}` ? 'refresh' : project.watching ? 'eye-off' : 'eye'}
+								name={busyAction === `watching:${project.id}:${service.id}`
+									? 'refresh'
+									: project.watching
+										? 'eye-off'
+										: 'eye'}
 								size={13}
 								spinning={busyAction === `watching:${project.id}:${service.id}`}
 							/>
@@ -496,6 +507,10 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		color: var(--app-text-muted);
+	}
+
+	.restarting-status {
+		color: #c66c6b;
 	}
 
 	.health-tag {

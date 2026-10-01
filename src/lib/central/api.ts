@@ -269,6 +269,10 @@ function normalizeListedState(rawState: string, rawStatus: string) {
 	const state = rawState.trim().toLowerCase();
 	const status = rawStatus.trim().toLowerCase();
 
+	if (state === 'restarting' || status.startsWith('restarting')) {
+		return 'restarting' as const;
+	}
+
 	if (state === 'paused' || status.includes('paused')) {
 		return 'paused' as const;
 	}
@@ -321,10 +325,11 @@ function toProject(raw: ListedProject, index: number): ComposeProject {
 	const statusMatch = /^([a-z-]+)(?:\((\d+)\))?$/i.exec(rawStatus);
 	const statusName = statusMatch?.[1] ?? '';
 	const containerCount = Number(statusMatch?.[2] ?? 0);
+	const listedState = normalizeListedState(String(raw.state ?? statusName), rawStatus);
 	const normalizedState =
-		raw.running === true || raw.active === true
+		listedState !== 'restarting' && (raw.running === true || raw.active === true)
 			? 'running'
-			: normalizeListedState(String(raw.state ?? statusName), rawStatus);
+			: listedState;
 
 	return {
 		id,
@@ -341,6 +346,7 @@ function toProject(raw: ListedProject, index: number): ComposeProject {
 			`./${name}`,
 		state:
 			normalizedState === 'running' ||
+			normalizedState === 'restarting' ||
 			normalizedState === 'paused' ||
 			normalizedState === 'exited' ||
 			normalizedState === 'uncreated' ||

@@ -31,7 +31,7 @@ export type ComposeProject = {
 	id: string;
 	name: string;
 	path: string;
-	state: 'running' | 'exited' | 'uncreated' | 'stopped' | 'paused';
+	state: 'running' | 'restarting' | 'exited' | 'uncreated' | 'stopped' | 'paused';
 	statusLabel: string;
 	containerCount: number;
 	watching: boolean;
@@ -51,7 +51,7 @@ export type ComposeService = {
 	composePath?: string;
 	appProtocol?: 'http' | 'https';
 	publishedPort?: number;
-	state: 'running' | 'exited' | 'paused' | 'created' | 'uncreated' | 'unknown';
+	state: 'running' | 'restarting' | 'exited' | 'paused' | 'created' | 'uncreated' | 'unknown';
 	stateText: string;
 	health?: 'healthy' | 'unhealthy';
 };

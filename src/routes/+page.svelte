@@ -49,6 +49,8 @@
 		hydrateBuilds,
 		hydrateProjects,
 		invalidateProjectServices,
+		isProjectRestarting,
+		isServiceRestarting,
 		logsCollection,
 		pauseServices,
 		projectsCollection,
@@ -827,16 +829,20 @@
 
 	function projectStartButtonSpinning(project: ComposeProject) {
 		const target = activeBuildTarget(project.id);
-		return Boolean(target) || Boolean(busyActionKindForProject(project.id));
+		return projectRestarting(project) || Boolean(target) || Boolean(busyActionKindForProject(project.id));
+	}
+
+	function projectRestarting(project: ComposeProject) {
+		return isProjectRestarting(project, sidebarServices, busyAction);
 	}
 
 	function projectPendingStatusLabel(project: ComposeProject) {
-		if (busyAction === `watching:${project.id}:project`) {
-			return project.watching ? 'stopping watch' : 'enabling watch';
+		if (projectRestarting(project)) {
+			return 'restarting';
 		}
 
-		if (busyAction === `restart:${project.id}:project`) {
-			return 'restarting';
+		if (busyAction === `watching:${project.id}:project`) {
+			return project.watching ? 'stopping watch' : 'enabling watch';
 		}
 
 		if (busyAction === `stop:${project.id}:project`) {
@@ -857,10 +863,6 @@
 		}
 
 		const busyKind = busyActionKindForProject(project.id);
-
-		if (busyKind === 'restart') {
-			return 'restarting';
-		}
 
 		if (busyKind === 'stop') {
 			return 'stopping';
@@ -894,6 +896,10 @@
 			return '';
 		}
 
+		if (projectRestarting(project)) {
+			return 'state-chip-exited';
+		}
+
 		return projectPendingStatusLabel(project)
 			? 'warn-state'
 			: latestBuildFailure(builds, project)
@@ -904,11 +910,11 @@
 	function serviceStartButtonSpinning(project: ComposeProject, service: ComposeService) {
 		const target = activeBuildTarget(project.id);
 		return (
+			isServiceRestarting(service, busyAction) ||
 			Boolean(target && target.serviceId === service.id) ||
 			busyAction === `stop:${project.id}:${service.id}` ||
 			busyAction === `start:${project.id}:${service.id}` ||
 			busyAction === `up-no-build:${project.id}:${service.id}` ||
-			busyAction === `restart:${project.id}:${service.id}` ||
 			busyAction === `watching:${project.id}:${service.id}` ||
 			busyAction === `remove:${project.id}:${service.id}`
 		);
@@ -919,7 +925,7 @@
 			return '';
 		}
 
-		if (busyAction === `restart:${project.id}:${service.id}`) {
+		if (isServiceRestarting(service, busyAction)) {
 			return 'restarting';
 		}
 
@@ -965,6 +971,10 @@
 	}
 
 	function serviceDisplayChipClass(project: ComposeProject | undefined, service: ComposeService) {
+		if (isServiceRestarting(service, busyAction)) {
+			return 'state-chip-exited';
+		}
+
 		return servicePendingStatusLabel(project, service)
 			? 'state-chip-mixed'
 			: project && latestBuildFailure(builds, project, service)
@@ -2414,12 +2424,12 @@
 
 	function projectCanStart(project: ComposeProject) {
 		const aggregateState = projectAggregateState(project);
-		return aggregateState !== 'running' && aggregateState !== 'paused';
+		return !['running', 'paused', 'restarting'].includes(aggregateState);
 	}
 
 	function projectCanStop(project: ComposeProject) {
 		const aggregateState = projectAggregateState(project);
-		return aggregateState === 'running' || aggregateState === 'paused' || aggregateState === 'mixed';
+		return ['running', 'paused', 'restarting', 'mixed'].includes(aggregateState);
 	}
 
 	function normalizeProjectStatusState(
@@ -2455,6 +2465,10 @@
 	}
 
 	function projectAggregateState(project: ComposeProject) {
+		if (projectRestarting(project)) {
+			return 'restarting';
+		}
+
 		const counts = new Map<string, number>();
 		const matches = [...project.statusLabel.toLowerCase().matchAll(/([a-z-]+)(?:\((\d+)\))?/g)];
 
@@ -2519,6 +2533,7 @@
 	}
 
 	function projectIconTone(project: ComposeProject) {
+		if (projectRestarting(project)) return 'project-icon-exited';
 		if (latestBuildFailure(builds, project) && !projectStartButtonSpinning(project))
 			return 'project-icon-exited';
 		const aggregateState = projectAggregateState(project);
@@ -2695,7 +2710,7 @@
 		expected: 'running' | 'paused' | 'stopped'
 	) {
 		if (expected === 'stopped') {
-			return service.state !== 'running' && service.state !== 'paused';
+			return !['running', 'paused', 'restarting'].includes(service.state);
 		}
 
 		return service.state === expected;
@@ -2801,7 +2816,7 @@
 
 		const serviceNames = service ? [service.serviceName] : undefined;
 		const shouldStop = service
-			? service.state === 'running' || service.state === 'paused'
+			? ['running', 'paused', 'restarting'].includes(service.state)
 			: projectCanStop(project);
 		busyAction = `${shouldStop ? 'stop' : 'start'}:${project.id}:${service?.id ?? 'project'}`;
 
@@ -3216,7 +3231,7 @@
 		service: ComposeService
 	): ContextMenuItem[] {
 		const canStart = ['exited', 'created', 'uncreated', 'unknown'].includes(service.state);
-		const canStop = service.state === 'running' || service.state === 'paused';
+		const canStop = ['running', 'paused', 'restarting'].includes(service.state);
 		const canPause = service.state === 'running';
 		const canUnpause = service.state === 'paused';
 		const items: ContextMenuItem[] = [];
@@ -3431,7 +3446,7 @@
 										{project.name}
 									</span>
 									{#if shouldShowProjectRowStatus(project)}
-										<span class="project-status">{projectPendingStatusLabel(project) || projectRowStatusLabel(project)}</span>
+										<span class="project-status" class:restarting-status={projectRestarting(project)}>{projectPendingStatusLabel(project) || projectRowStatusLabel(project)}</span>
 									{/if}
 								</span>
 								<span class="project-meta">
@@ -4441,6 +4456,10 @@
 		line-height: 1;
 		font-size: 0.72rem;
 		color: var(--app-text-muted);
+	}
+
+	.restarting-status {
+		color: #c76a68;
 	}
 
 	:global(.project-icon-uncreated) {
