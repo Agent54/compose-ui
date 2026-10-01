@@ -162,15 +162,15 @@
 	}
 
 	function servicePendingStatusLabel(service: ComposeService) {
-		if (isServiceRestarting(service, busyAction)) {
-			return 'restarting';
-		}
-
 		if (
 			busyAction === `stop:${project.id}:project` ||
 			busyAction === `stop:${project.id}:${service.id}`
 		) {
 			return 'stopping';
+		}
+
+		if (isServiceRestarting(service, busyAction)) {
+			return 'restarting';
 		}
 
 		if (busyAction === `remove:${project.id}:${service.id}`) {

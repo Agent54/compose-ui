@@ -66,6 +66,7 @@
 		setProjectExpanded,
 		setSidebarWidth,
 		setProjectWatching,
+		stopProjectWatch,
 		stopServices,
 		startContainer,
 		startProject,
@@ -837,6 +838,10 @@
 	}
 
 	function projectPendingStatusLabel(project: ComposeProject) {
+		if (busyActionKindForProject(project.id) === 'stop') {
+			return 'stopping';
+		}
+
 		if (projectRestarting(project)) {
 			return 'restarting';
 		}
@@ -925,12 +930,15 @@
 			return '';
 		}
 
-		if (isServiceRestarting(service, busyAction)) {
-			return 'restarting';
+		if (
+			busyAction === `stop:${project.id}:project` ||
+			busyAction === `stop:${project.id}:${service.id}`
+		) {
+			return 'stopping';
 		}
 
-		if (busyAction === `stop:${project.id}:${service.id}`) {
-			return 'stopping';
+		if (isServiceRestarting(service, busyAction)) {
+			return 'restarting';
 		}
 
 		if (busyAction === `remove:${project.id}:${service.id}`) {
@@ -2737,6 +2745,12 @@
 				await wait(ACTION_SETTLE_DELAY_MS);
 			}
 		}
+
+		if (expected === 'stopped') {
+			throw new Error(
+				`${serviceNames?.join(', ') || projectId} did not stop. The container may still be restarting; try stopping it again.`
+			);
+		}
 	}
 
 	async function refresh(options?: { silent?: boolean }) {
@@ -2829,6 +2843,8 @@
 			if (shouldStop) {
 				for (const path of actionPaths) {
 					await stopServices(uiState, actionTarget(project, path), serviceNames);
+					setProjectWatching(project.id, false);
+					closeWatchStream(project.id);
 				}
 				await syncAfterAction(project, `Stopped ${service?.serviceName ?? project.name}.`, {
 					serviceNames,
@@ -3093,11 +3109,9 @@
 				}
 				appendLog(project.id, 'ok', `Started ${service?.serviceName ?? project.name} with watch mode.`);
 			} else {
-				for (const path of actionPaths) {
-					await startProject(uiState, path, nextWatching, serviceNames, true);
-				}
+				await stopProjectWatch(uiState, project);
 				closeWatchStream(project.id);
-				appendLog(project.id, 'info', `Started ${service?.serviceName ?? project.name} without watch mode.`);
+				appendLog(project.id, 'info', `Stopped watching ${project.name}.`);
 			}
 
 			setProjectWatching(project.id, nextWatching);

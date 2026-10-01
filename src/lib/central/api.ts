@@ -831,10 +831,24 @@ export async function stopServices(
 	project: Pick<ComposeProject, 'id' | 'path'>,
 	services?: string[]
 ) {
+	// Watch holds the project's mutation lock and may recreate stopped containers.
+	await stopProjectWatch(ui, project);
 	await postProjectAction(ui, project.path, 'stop', project.id, {
 		removeOrphans: true,
 		...(services?.length ? { services } : {})
 	});
+}
+
+export async function stopProjectWatch(ui: UiState, project: Pick<ComposeProject, 'id'>) {
+	const response = await fetch(
+		joinUrl(ui.serverUrl, ui.apiVersion, `/watch/${encodeURIComponent(project.id)}`),
+		{ method: 'DELETE' }
+	);
+
+	// An absent watch is already stopped, including when the UI's snapshot is stale.
+	if (!response.ok && response.status !== 404) {
+		throw await responseError(`Stopping watch for ${project.id}`, response);
+	}
 }
 
 export async function removeServices(
