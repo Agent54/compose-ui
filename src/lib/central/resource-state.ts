@@ -3,20 +3,39 @@ import type { ComposeBuild } from './types';
 
 export type ResourcePressure = 'normal' | 'warning' | 'critical';
 
-// Allocation failures need not kill a process, and memory is often free again
-// by the next sample. Keep the failed build's diagnostic visible after recovery.
+// Resource failures can be absent from the next utilization sample. Keep the
+// latest failed build's diagnostic visible after recovery and during retries.
 export function memoryBuildFailures(
 	builds: ComposeBuild[],
 	output: Array<{ buildId: string; message: string }>
 ) {
+	return resourceBuildFailures(
+		builds,
+		output,
+		/\bcannot allocate memory\b|\bout of memory\b|\bENOMEM\b|\boom[-_ ]?killed\b/i
+	);
+}
+
+export function diskBuildFailures(
+	builds: ComposeBuild[],
+	output: Array<{ buildId: string; message: string }>
+) {
+	return resourceBuildFailures(
+		builds,
+		output,
+		/\bno space left on device\b|\bENOSPC\b|\bdisk quota exceeded\b|\bEDQUOT\b/i
+	);
+}
+
+function resourceBuildFailures(
+	builds: ComposeBuild[],
+	output: Array<{ buildId: string; message: string }>,
+	pattern: RegExp
+) {
 	const completed = builds.filter((build) => build.status !== 'running');
 	const failures = new Map<string, string>();
 	for (const entry of output) {
-		if (
-			/\bcannot allocate memory\b|\bout of memory\b|\bENOMEM\b|\boom[-_ ]?killed\b/i.test(
-				entry.message
-			)
-		) {
+		if (pattern.test(entry.message)) {
 			failures.set(entry.buildId, entry.message);
 		}
 	}

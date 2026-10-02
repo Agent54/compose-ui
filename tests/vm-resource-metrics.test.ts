@@ -1,9 +1,79 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { vmHostMetrics } from '../src/lib/central/vm-resource-metrics.ts';
+import { vmDiskMetrics, vmHostMetrics } from '../src/lib/central/vm-resource-metrics.ts';
 
 const formatBytes = (value: number | undefined) => (value === undefined ? '—' : `${value} B`);
+
+test('VM disk free space stays unavailable when only sparse image allocation is known', () => {
+	for (const resources of [undefined, {}, { diskAllocatedBytes: 100, diskLogicalBytes: 30000 }]) {
+		const metric = vmDiskMetrics(resources, formatBytes)[0];
+		assert.equal(metric.label, 'DISK FREE');
+		assert.equal(metric.value, '—');
+		assert.equal(metric.percent, undefined);
+		assert.equal(metric.pressure, 'normal');
+		assert.match(metric.tooltip, /free space unavailable/);
+	}
+});
+
+test('guest filesystem counters show available bytes and warn before Docker runs out of space', () => {
+	const metric = vmDiskMetrics(
+		{
+			diskTotalBytes: 21118275584,
+			diskAvailableBytes: 163483648,
+			diskTotalInodes: 1310720,
+			diskFreeInodes: 631409,
+			diskAllocatedBytes: 21150126080,
+			diskLogicalBytes: 32212254720
+		},
+		formatBytes
+	)[0];
+	assert.equal(metric.value, '163483648 B');
+	assert.equal(metric.pressure, 'critical');
+	assert.ok(metric.percent! > 99);
+	assert.match(metric.tooltip, /163483648 B available for writes \/ 21118275584 B total/);
+	assert.match(metric.tooltip, /\/storage\/docker/);
+	assert.match(metric.tooltip, /Sampled at most once per minute/);
+});
+
+test('zero guest space is visible and critical rather than unavailable', () => {
+	const metric = vmDiskMetrics({ diskTotalBytes: 1000, diskAvailableBytes: 0 }, formatBytes)[0];
+	assert.equal(metric.value, '0 B');
+	assert.equal(metric.percent, 100);
+	assert.equal(metric.pressure, 'critical');
+	assert.match(metric.tooltip, /Disk is full/);
+	assert.equal(vmDiskMetrics({ diskAvailableBytes: 0 }, formatBytes)[0].pressure, 'critical');
+});
+
+test('inode exhaustion is critical even when plenty of bytes remain', () => {
+	const metric = vmDiskMetrics(
+		{ diskTotalBytes: 1000, diskAvailableBytes: 800, diskTotalInodes: 100, diskFreeInodes: 0 },
+		formatBytes
+	)[0];
+	assert.equal(metric.value, '800 B · 0 inodes');
+	assert.equal(metric.percent, 20);
+	assert.equal(metric.pressure, 'critical');
+	assert.match(metric.tooltip, /No free inodes; new files cannot be created/);
+});
+
+test('healthy and low guest space use the existing pressure thresholds', () => {
+	for (const [available, pressure] of [
+		[500, 'normal'],
+		[100, 'warning'],
+		[50, 'critical']
+	] as const) {
+		const metric = vmDiskMetrics(
+			{ diskTotalBytes: 1000, diskAvailableBytes: available },
+			formatBytes
+		)[0];
+		assert.equal(metric.pressure, pressure);
+	}
+	const inodeWarning = vmDiskMetrics(
+		{ diskTotalBytes: 1000, diskAvailableBytes: 800, diskTotalInodes: 100, diskFreeInodes: 10 },
+		formatBytes
+	)[0];
+	assert.equal(inodeWarning.pressure, 'warning');
+});
 
 test('old runtime responses and unavailable samples do not invent zero usage', () => {
 	for (const resources of [undefined, {}, { memoryLimitBytes: 8192, diskLogicalBytes: 30000 }]) {

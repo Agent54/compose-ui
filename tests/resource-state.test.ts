@@ -1,7 +1,11 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { memoryBuildFailures, resourcePressure } from '../src/lib/central/resource-state.ts';
+import {
+	diskBuildFailures,
+	memoryBuildFailures,
+	resourcePressure
+} from '../src/lib/central/resource-state.ts';
 import type { ComposeBuild } from '../src/lib/central/types.ts';
 
 test('resource pressure changes at the warning and critical thresholds', () => {
@@ -79,4 +83,42 @@ test('disk exhaustion, compiler errors and successful builds do not report memor
 			1
 		);
 	}
+});
+
+const diskMessage =
+	'failed to solve: failed to register layer: write /usr/share/coreutils/locales/uniq/sv.ftl: no space left on device';
+const diskOutput = [{ buildId: failed.id, message: diskMessage }];
+
+test('a failed layer registration reports disk exhaustion independently of utilization gauges', () => {
+	assert.deepEqual(diskBuildFailures([failed], diskOutput), [{ build: failed, message: diskMessage }]);
+	assert.deepEqual(memoryBuildFailures([failed], diskOutput), []);
+	for (const diagnostic of ['ENOSPC', 'write failed: Disk quota exceeded', 'EDQUOT']) {
+		assert.equal(
+			diskBuildFailures([failed], [{ buildId: failed.id, message: diagnostic }]).length,
+			1
+		);
+	}
+	for (const diagnostic of [message, 'failed to compile', 'ResourceExhausted']) {
+		assert.deepEqual(diskBuildFailures([failed], [{ buildId: failed.id, message: diagnostic }]), []);
+	}
+});
+
+test('disk failure survives retries and clears only after the same target recovers', () => {
+	const retry = {
+		...failed,
+		id: 'retry',
+		startedAt: '2026-09-29T02:00:00Z',
+		status: 'running' as const
+	};
+	assert.deepEqual(diskBuildFailures([retry], [{ buildId: retry.id, message: diskMessage }]), []);
+	assert.equal(diskBuildFailures([failed, retry], diskOutput)[0].build.id, failed.id);
+	const recovered = { ...retry, status: 'succeeded' as const };
+	assert.equal(diskBuildFailures([failed, { ...recovered, serviceName: 'db' }], diskOutput).length, 1);
+	assert.equal(
+		diskBuildFailures([failed, { ...recovered, projectId: 'other', projectName: 'other' }], diskOutput).length,
+		1
+	);
+	assert.deepEqual(diskBuildFailures([failed, recovered], diskOutput), []);
+	assert.deepEqual(diskBuildFailures([failed, { ...recovered, serviceName: undefined }], diskOutput), []);
+	assert.deepEqual(diskBuildFailures([{ ...failed, status: 'succeeded' }], diskOutput), []);
 });

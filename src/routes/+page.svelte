@@ -7,7 +7,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
 	import { isReplacementBuild, latestBuildFailure, mergeBuilds } from '$lib/central/build-state';
-	import { vmHostMetrics } from '$lib/central/vm-resource-metrics';
+	import { vmDiskMetrics, vmHostMetrics } from '$lib/central/vm-resource-metrics';
 	import {
 		buildCompletion,
 		parseOutputMessage,
@@ -15,6 +15,7 @@
 		type OutputMessage
 	} from '$lib/central/output-stream';
 	import {
+		diskBuildFailures,
 		memoryBuildFailures,
 		resourcePressure,
 		type ResourcePressure
@@ -222,6 +223,7 @@
 
 	const allLogs = $derived((allLogsQuery.data ?? []) as LogEntry[]);
 	const memoryBuildFailure = $derived(memoryBuildFailures(builds, buildStreamEntries)[0]);
+	const diskBuildFailure = $derived(diskBuildFailures(builds, buildStreamEntries)[0]);
 
 	function stateRank(state: ComposeProject['state'] | ComposeService['state'] | 'mixed') {
 		if (state === 'running') return 0;
@@ -2016,7 +2018,7 @@
 		return `${metric.tooltip}\n${pressure === 'critical' ? 'Critical' : 'High'} utilization: ${formatPercent(metric.percent)}`;
 	}
 
-	async function showMemoryBuildFailure(build: ComposeBuild) {
+	async function showResourceBuildFailure(build: ComposeBuild) {
 		const project = [...projectsCollection.state.values()].find(
 			(entry) => entry.id === build.projectId || entry.name === build.projectName
 		);
@@ -2224,6 +2226,7 @@
 					: `All containers in the VM\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)} memory`,
 				percent: memory
 			},
+			...vmDiskMetrics(runtimeStatus?.vmResources, formatBytes),
 			...vmHostMetrics(runtimeStatus?.vmResources, formatBytes),
 			...((runtimeStatus?.oomKillCount ?? 0) > 0
 				? [
@@ -2272,7 +2275,7 @@
 					disk === undefined
 						? formatBytes(resources?.diskUsedBytes ?? resources?.diskTotalBytes)
 						: formatPercent(disk),
-				tooltip: `Host disk\n${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
+				tooltip: `Host disk\n${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}\nSampled at most once per minute. This does not report Docker guest filesystem free space.`,
 				percent: disk
 			}
 		];
@@ -3605,13 +3608,27 @@
 				<h2>{selectedProject?.name ?? 'Compose Projects'}</h2>
 			</div>
 			<div class="resource-strip" aria-label="Resource usage">
+				{#if diskBuildFailure}
+					<button
+						class="resource-chip resource-failure"
+						type="button"
+						data-pressure="critical"
+						data-tooltip={`${diskBuildFailure.message}\nRecorded build storage failure; see VM DISK FREE for current available space.\nOpen build output`}
+						onclick={() => void showResourceBuildFailure(diskBuildFailure.build)}
+					>
+						<strong
+							>{diskBuildFailure.build.targetName || diskBuildFailure.build.projectName}: Build
+							out of disk space</strong
+						>
+					</button>
+				{/if}
 				{#if memoryBuildFailure}
 					<button
 						class="resource-chip resource-failure"
 						type="button"
 						data-pressure="critical"
 						data-tooltip={`${memoryBuildFailure.message}\nOpen build output`}
-						onclick={() => void showMemoryBuildFailure(memoryBuildFailure.build)}
+						onclick={() => void showResourceBuildFailure(memoryBuildFailure.build)}
 					>
 						<strong
 							>{memoryBuildFailure.build.targetName || memoryBuildFailure.build.projectName}: Build

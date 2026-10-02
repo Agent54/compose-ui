@@ -39,11 +39,15 @@ export function latestBuildFailure(
 	project: Pick<ComposeProject, 'id' | 'name'>,
 	service?: Pick<ComposeService, 'serviceName'>
 ) {
+	// A project build can recover all services, but its failure does not identify
+	// which service failed. Keep that warning on the project rather than every child.
 	const matching = builds
 		.filter(
 			(build) =>
 				(build.projectId === project.id || build.projectName === project.name) &&
-				(!service || !build.serviceName || build.serviceName === service.serviceName)
+				(!service ||
+					build.serviceName === service.serviceName ||
+					(!build.serviceName && build.status !== 'failed'))
 		)
 		.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
 	if (service) return matching[0]?.status === 'failed' ? matching[0] : undefined;

@@ -179,6 +179,10 @@ export type VMResources = {
 	balloonInflatedBytes?: number;
 	diskAllocatedBytes?: number;
 	diskLogicalBytes?: number;
+	diskTotalBytes?: number;
+	diskAvailableBytes?: number;
+	diskTotalInodes?: number;
+	diskFreeInodes?: number;
 };
 
 export type LogEntry = {

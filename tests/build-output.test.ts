@@ -54,6 +54,37 @@ test('a newer build clears the warning only for its target, retaining failed his
 	assert.equal(latestBuildFailure([failed], { id: 'elsewhere', name: 'elsewhere' }), undefined);
 });
 
+test('project-level failures do not mark sibling services as failed', () => {
+	for (const kind of ['build', 'watch'] as const) {
+		const failed = { ...build, kind };
+		assert.equal(latestBuildFailure([failed], project), failed);
+		for (const serviceName of ['web', 'db']) {
+			assert.equal(latestBuildFailure([failed], project, { serviceName }), undefined);
+		}
+	}
+});
+
+test('a failed project build preserves known service failures without spreading them', () => {
+	const failedService = { ...build, serviceName: 'web' };
+	const failedProject = { ...build, id: '2', startedAt: '2026-09-15T00:02:00Z' };
+	const history = [failedService, failedProject];
+	assert.equal(latestBuildFailure(history, project), failedProject);
+	assert.equal(latestBuildFailure(history, project, { serviceName: 'web' }), failedService);
+	assert.equal(latestBuildFailure(history, project, { serviceName: 'db' }), undefined);
+	assert.equal(latestBuildFailure([failedService], project, { serviceName: 'db' }), undefined);
+});
+
+test('project-level success or retry clears a known service failure', () => {
+	const failedService = { ...build, serviceName: 'web' };
+	for (const status of ['succeeded', 'running'] as const) {
+		const newer = { ...build, id: '2', status, startedAt: '2026-09-15T00:02:00Z' };
+		assert.equal(
+			latestBuildFailure([failedService, newer], project, { serviceName: 'web' }),
+			undefined
+		);
+	}
+});
+
 test('a reused build ID after server restart does not inherit the old failure or target', () => {
 	const previous = { ...build, serviceName: 'web' };
 	const incoming = {
@@ -67,9 +98,13 @@ test('a reused build ID after server restart does not inherit the old failure or
 	};
 	assert.deepEqual(mergeBuilds([previous], [incoming]), [incoming]);
 	const newSnapshot = { ...incoming, serverStartedAt: incoming.startedAt };
-	assert.deepEqual(mergeBuilds([
-		{ ...previous, serverStartedAt: previous.startedAt, finishedAt: '2026-09-15T03:00:00Z' }
-	], [newSnapshot]), [newSnapshot]);
+	assert.deepEqual(
+		mergeBuilds(
+			[{ ...previous, serverStartedAt: previous.startedAt, finishedAt: '2026-09-15T03:00:00Z' }],
+			[newSnapshot]
+		),
+		[newSnapshot]
+	);
 });
 
 test('only the server terminal status determines build success or failure', () => {
