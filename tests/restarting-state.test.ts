@@ -98,3 +98,24 @@ test('local service and project restarts propagate without marking unrelated nod
 	assert.equal(isServiceRestarting(runningService), false);
 	assert.equal(isServiceRestarting(service), true);
 });
+
+test('service requests carry all known Compose paths without losing URL characters', async () => {
+	const paths = '/work/first & app/compose.yaml,/work/second/compose.yaml';
+	const requests: URL[] = [];
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = (input) => {
+		requests.push(new URL(String(input)));
+		return Promise.resolve(Response.json({ services: {} }));
+	};
+
+	try {
+		await loadProjectServices(ui, { id: 'demo', path: paths });
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+
+	const ps = requests.find((url) => url.pathname.endsWith('/ps/demo'));
+	assert.ok(ps);
+	assert.equal(ps.searchParams.get('path'), paths);
+	assert.equal(ps.searchParams.get('all'), 'true');
+});

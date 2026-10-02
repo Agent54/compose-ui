@@ -889,6 +889,7 @@ export async function loadProjectServices(
 ): Promise<ComposeService[]> {
 	const params = new URLSearchParams();
 	params.set('all', 'true');
+	params.set('path', project.path);
 	const configPromise = loadProjectConfig(ui, project.id, project.path, 'json')
 		.then((config) => JSON.parse(config) as unknown)
 		.catch(() => undefined);

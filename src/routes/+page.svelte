@@ -1694,7 +1694,7 @@
 		await uiStateCollection.preload();
 		const ui = uiStateCollection.state.get('app');
 
-		if (!ui || disposed || systemResourcesRefreshing) {
+		if (!ui || disposed || document.hidden || systemResourcesRefreshing) {
 			return;
 		}
 
@@ -1722,6 +1722,8 @@
 			projectResources = null;
 			return;
 		}
+
+		if (document.hidden) return;
 
 		const service = selectedResourceService;
 		const actionPaths = service ? actionComposePaths(project, service) : composeFilePaths(project);
@@ -1758,13 +1760,16 @@
 		};
 
 		handleHashChange();
-		void refresh();
-		void refreshBuildState();
-		void refreshSystemResources();
-		void refreshSelectedResources();
+		if (!document.hidden) {
+			void refresh();
+			void refreshBuildState();
+			void refreshSystemResources();
+			void refreshSelectedResources();
+		}
 		window.addEventListener('hashchange', handleHashChange);
 
-		const intervalId = window.setInterval(() => {
+		const poll = () => {
+			if (document.hidden) return;
 			const currentUi = uiStateCollection.state.get('app');
 
 			// Builds must still be discovered while a blocking /up request is pending.
@@ -1778,10 +1783,13 @@
 			if (refreshing || busyAction) return;
 			void refresh({ silent: true });
 			void refreshSelectedResources();
-		}, LS_POLL_INTERVAL_MS);
+		};
+		document.addEventListener('visibilitychange', poll);
+		const intervalId = window.setInterval(poll, LS_POLL_INTERVAL_MS);
 
 		return () => {
 			disposed = true;
+			document.removeEventListener('visibilitychange', poll);
 			window.removeEventListener('hashchange', handleHashChange);
 			window.clearInterval(intervalId);
 			for (const source of buildStreamControllers.values()) {
