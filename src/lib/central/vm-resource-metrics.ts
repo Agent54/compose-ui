@@ -24,8 +24,8 @@ export function vmDiskMetrics(resources: VMResources | undefined, formatBytes: B
 				(freeInodes === 0 ? ' · 0 inodes' : ''),
 			tooltip:
 				available === undefined
-					? 'VM Docker disk free space unavailable'
-					: `Docker storage inside the VM (/storage/docker)\n${formatBytes(available)} available for writes / ${formatBytes(total)} total\n${freeInodes?.toLocaleString() ?? '—'} / ${totalInodes?.toLocaleString() ?? '—'} free inodes\nSampled at most once per minute.${available === 0 ? '\nDisk is full: no space available for writes.' : ''}${freeInodes === 0 ? '\nNo free inodes; new files cannot be created.' : ''}`,
+					? 'VM disk free space unavailable'
+					: `VM disk\nFree ${formatBytes(available)} / ${formatBytes(total)}\nInodes ${freeInodes?.toLocaleString() ?? '—'} / ${totalInodes?.toLocaleString() ?? '—'}${available === 0 ? '\nDisk full' : ''}${freeInodes === 0 ? '\nNo free inodes' : ''}`,
 			percent,
 			pressure:
 				available === 0 || freeInodes === 0
@@ -44,14 +44,14 @@ export function vmHostMetrics(resources: VMResources | undefined, formatBytes: B
 		metrics.push({
 			label: 'HOST RAM',
 			value: formatBytes(resources.memoryResidentBytes),
-			tooltip: `VM resident RAM on the host\n${formatBytes(resources.memoryResidentBytes)} resident / ${formatBytes(resources.memoryLimitBytes)} configured guest limit\nIncludes VM process overhead; excludes compressed and swapped pages.`
+			tooltip: `VM resident memory\n${formatBytes(resources.memoryResidentBytes)} resident / ${formatBytes(resources.memoryLimitBytes)} guest limit`
 		});
 	}
 	if (resources?.balloonInflatedBytes !== undefined) {
 		metrics.push({
 			label: 'BALLOON',
 			value: formatBytes(resources.balloonInflatedBytes),
-			tooltip: `Virtio balloon\n${formatBytes(resources.balloonInflatedBytes)} inflated / ${formatBytes(resources.balloonTargetBytes)} target\nFree-page reporting can reclaim RAM while the balloon is zero.`
+			tooltip: `VM balloon\n${formatBytes(resources.balloonInflatedBytes)} inflated / ${formatBytes(resources.balloonTargetBytes)} target`
 		});
 	}
 	metrics.push({
@@ -60,8 +60,8 @@ export function vmHostMetrics(resources: VMResources | undefined, formatBytes: B
 			resources?.diskAllocatedBytes === undefined ? '—' : formatBytes(resources.diskAllocatedBytes),
 		tooltip:
 			resources?.diskAllocatedBytes === undefined
-				? 'VM disk image allocation unavailable'
-				: `VM disk images on the host\n${formatBytes(resources.diskAllocatedBytes)} allocated blocks / ${formatBytes(resources.diskLogicalBytes)} logical file size\nStorage and overlay images; sparse holes consume no host blocks. Sampled at most once per minute.\nSee DISK FREE for space available inside the VM.`
+				? 'VM disk images unavailable'
+				: `VM disk images\n${formatBytes(resources.diskAllocatedBytes)} allocated / ${formatBytes(resources.diskLogicalBytes)} logical`
 	});
 	return metrics;
 }

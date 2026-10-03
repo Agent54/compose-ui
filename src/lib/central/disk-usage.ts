@@ -58,7 +58,7 @@ export async function loadDiskUsage(
 		return payload as DiskUsage;
 	} catch (error) {
 		if (controller.signal.aborted && !signal?.aborted) {
-			throw new Error('Disk usage request timed out. Try again when the VM is idle.');
+			throw new Error('Disk usage request timed out.');
 		}
 		throw error;
 	} finally {

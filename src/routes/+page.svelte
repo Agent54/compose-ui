@@ -541,13 +541,9 @@
 		window.addEventListener('mouseup', handleUp, { once: true });
 	}
 
-	function statusLineText() {
-		const base = uiState?.statusDetail ?? 'Status unavailable.';
-		return `${base} ${autoRefreshPaused ? 'Polling paused.' : 'Polling every 10s.'}`;
-	}
-
 	function statusTooltipText() {
-		return `${statusLineText()} ${autoRefreshPaused ? 'Click to resume polling.' : 'Click to pause polling.'}`;
+		if (uiState?.status === 'error') return uiState.statusDetail || 'Connection error';
+		return autoRefreshPaused ? 'Resume updates' : 'Pause updates';
 	}
 
 	function formatBuildTime(value: string | null) {
@@ -2021,16 +2017,6 @@
 		return `${amount.toFixed(amount >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 	}
 
-	function resourceMetricTooltip(metric: ResourceMetric) {
-		const pressure = resourcePressure(metric.percent);
-
-		if (pressure === 'normal') {
-			return metric.tooltip;
-		}
-
-		return `${metric.tooltip}\n${pressure === 'critical' ? 'Critical' : 'High'} utilization: ${formatPercent(metric.percent)}`;
-	}
-
 	async function showResourceBuildFailure(build: ComposeBuild) {
 		const project = [...projectsCollection.state.values()].find(
 			(entry) => entry.id === build.projectId || entry.name === build.projectName
@@ -2187,7 +2173,7 @@
 			{
 				label: 'CPU',
 				value: formatPercent(cpu),
-				tooltip: `${scope} CPU\n${formatPercent(cpu)}\nUsage: ${formatCores(cpuCores)}\nRaw: ${formatPercent(usage?.cpuPercent)}\nLimit: ${limits?.cpuCores ? `${limits.cpuCores} cores` : `${systemCpuCount() ?? 'unknown'} VM CPUs`}`,
+				tooltip: `${scope} CPU\n${formatCores(cpuCores)} / ${limits?.cpuCores ? `${limits.cpuCores} cores` : `${systemCpuCount() ?? '—'} VM CPUs`}`,
 				percent: cpu
 			},
 			{
@@ -2199,7 +2185,7 @@
 			{
 				label: 'HD',
 				value: formatBytes(diskBytes),
-				tooltip: `${scope} disk I/O\nNo capacity limit configured\nRead ${formatBytes(usage?.blockReadBytes)}\nWrite ${formatBytes(usage?.blockWriteBytes)}`
+				tooltip: `${scope} disk I/O\nRead ${formatBytes(usage?.blockReadBytes)}\nWrite ${formatBytes(usage?.blockWriteBytes)}`
 			}
 		];
 	}
@@ -2227,16 +2213,14 @@
 			{
 				label: 'CPU',
 				value: formatPercent(cpu),
-				tooltip: `All containers in the VM\n${cpu === undefined ? 'Live CPU usage unavailable' : formatPercent(cpu)} CPU\n${cpuCount ?? 'unknown'} VM CPUs`,
+				tooltip: `VM CPU\n${formatPercent(cpu)} · ${cpuCount ?? '—'} CPUs`,
 				percent: cpu
 			},
 			{
 				label: 'MEM',
 				value:
 					memory === undefined ? formatBytes(memoryUsed ?? memoryTotal) : formatPercent(memory),
-				tooltip: runtimeStatus?.memoryAvailableBytes !== undefined
-					? `Container VM memory\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`
-					: `All containers in the VM\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)} memory`,
+				tooltip: `VM memory\n${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`,
 				percent: memory
 			},
 			...vmDiskMetrics(runtimeStatus?.vmResources, formatBytes),
@@ -2246,8 +2230,7 @@
 						{
 							label: 'OOM',
 							value: String(runtimeStatus?.oomKillCount),
-							tooltip:
-								'VM out-of-memory kills since boot. This is a recorded event count, not current memory usage.',
+							tooltip: `OOM kills since boot\n${runtimeStatus?.oomKillCount}`,
 							pressure: 'warning' as const
 						}
 					]
@@ -2270,7 +2253,7 @@
 			{
 				label: 'CPU',
 				value: formatPercent(resources?.cpuPercent),
-				tooltip: `Host CPU\n${formatPercent(resources?.cpuPercent)}\n${resources?.cpuCount ?? 'unknown'} CPUs`,
+				tooltip: `Host CPU\n${formatPercent(resources?.cpuPercent)} · ${resources?.cpuCount ?? '—'} CPUs`,
 				percent: resources?.cpuPercent
 			},
 			{
@@ -2288,7 +2271,7 @@
 					disk === undefined
 						? formatBytes(resources?.diskUsedBytes ?? resources?.diskTotalBytes)
 						: formatPercent(disk),
-				tooltip: `Host disk\n${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}\nSampled at most once per minute. This does not report Docker guest filesystem free space.`,
+				tooltip: `Host disk\n${formatBytes(resources?.diskUsedBytes)} / ${formatBytes(resources?.diskTotalBytes)}`,
 				percent: disk
 			}
 		];
@@ -3631,7 +3614,7 @@
 						class="resource-chip resource-failure"
 						type="button"
 						data-pressure="critical"
-						data-tooltip={`${diskBuildFailure.message}\nRecorded build storage failure; see VM DISK FREE for current available space.\nOpen build output`}
+						data-tooltip={`${diskBuildFailure.message}\nBuild output`}
 						onclick={() => void showResourceBuildFailure(diskBuildFailure.build)}
 					>
 						<strong
@@ -3645,7 +3628,7 @@
 						class="resource-chip resource-failure"
 						type="button"
 						data-pressure="critical"
-						data-tooltip={`${memoryBuildFailure.message}\nOpen build output`}
+						data-tooltip={`${memoryBuildFailure.message}\nBuild output`}
 						onclick={() => void showResourceBuildFailure(memoryBuildFailure.build)}
 					>
 						<strong
@@ -3661,7 +3644,7 @@
 							<span
 								class="resource-chip"
 								data-pressure={resourcePressure(metric.percent)}
-								data-tooltip={resourceMetricTooltip(metric)}
+								data-tooltip={metric.tooltip}
 							>
 								<span>{metric.label}</span>
 								<strong>{metric.value}</strong>
@@ -3673,12 +3656,22 @@
 					<span class="resource-group-label">VM</span>
 					{#each vmMetrics() as metric (`vm-${metric.label}`)}
 						{#if metric.label === 'DISK FREE'}
-							<button type="button" class="resource-chip disk-link" aria-label="Open VM disk usage" aria-pressed={diskPageOpen} onclick={openDiskUsage} data-pressure={metric.pressure ?? resourcePressure(metric.percent)} data-tooltip={`${resourceMetricTooltip(metric)}\nOpen disk usage and cleanup candidates`}><span>{metric.label}</span><strong>{metric.value}</strong></button>
+							<button
+								type="button"
+								class="resource-chip disk-link"
+								aria-label="Open VM disk usage"
+								aria-pressed={diskPageOpen}
+								onclick={openDiskUsage}
+								data-pressure={metric.pressure ?? resourcePressure(metric.percent)}
+								data-tooltip={metric.tooltip}
+							>
+								<span>{metric.label}</span><strong>{metric.value}</strong>
+							</button>
 						{:else}
 							<span
 								class="resource-chip"
 								data-pressure={metric.pressure ?? resourcePressure(metric.percent)}
-								data-tooltip={resourceMetricTooltip(metric)}
+								data-tooltip={metric.tooltip}
 							>
 								<span>{metric.label}</span>
 								<strong>{metric.value}</strong>
@@ -3693,7 +3686,7 @@
 							<span
 								class="resource-chip"
 								data-pressure={resourcePressure(metric.percent)}
-								data-tooltip={resourceMetricTooltip(metric)}
+								data-tooltip={metric.tooltip}
 							>
 								<span>{metric.label}</span>
 								<strong>{metric.value}</strong>
@@ -3706,7 +3699,7 @@
 				class="status-line"
 				type="button"
 				aria-pressed={autoRefreshPaused}
-				aria-label={autoRefreshPaused ? 'Resume Compose polling' : 'Pause Compose polling'}
+				aria-label={autoRefreshPaused ? 'Resume updates' : 'Pause updates'}
 				data-tooltip={statusTooltipText()}
 				onmousedown={toggleAutoRefresh}
 			>

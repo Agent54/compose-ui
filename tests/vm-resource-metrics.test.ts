@@ -31,9 +31,7 @@ test('guest filesystem counters show available bytes and warn before Docker runs
 	assert.equal(metric.value, '163483648 B');
 	assert.equal(metric.pressure, 'critical');
 	assert.ok(metric.percent! > 99);
-	assert.match(metric.tooltip, /163483648 B available for writes \/ 21118275584 B total/);
-	assert.match(metric.tooltip, /\/storage\/docker/);
-	assert.match(metric.tooltip, /Sampled at most once per minute/);
+	assert.match(metric.tooltip, /163483648 B \/ 21118275584 B/);
 });
 
 test('zero guest space is visible and critical rather than unavailable', () => {
@@ -41,7 +39,7 @@ test('zero guest space is visible and critical rather than unavailable', () => {
 	assert.equal(metric.value, '0 B');
 	assert.equal(metric.percent, 100);
 	assert.equal(metric.pressure, 'critical');
-	assert.match(metric.tooltip, /Disk is full/);
+	assert.match(metric.tooltip, /Disk full/);
 	assert.equal(vmDiskMetrics({ diskAvailableBytes: 0 }, formatBytes)[0].pressure, 'critical');
 });
 
@@ -53,7 +51,7 @@ test('inode exhaustion is critical even when plenty of bytes remain', () => {
 	assert.equal(metric.value, '800 B · 0 inodes');
 	assert.equal(metric.percent, 20);
 	assert.equal(metric.pressure, 'critical');
-	assert.match(metric.tooltip, /No free inodes; new files cannot be created/);
+	assert.match(metric.tooltip, /No free inodes/);
 });
 
 test('healthy and low guest space use the existing pressure thresholds', () => {
@@ -81,7 +79,7 @@ test('old runtime responses and unavailable samples do not invent zero usage', (
 			{
 				label: 'IMAGE',
 				value: '—',
-				tooltip: 'VM disk image allocation unavailable'
+				tooltip: 'VM disk images unavailable'
 			}
 		]);
 	}
@@ -107,9 +105,9 @@ test('zero balloon inflation remains visible alongside resident RAM and sparse a
 			{ label: 'IMAGE', value: '100 B' }
 		]
 	);
-	assert.match(metrics[0].tooltip, /8192 B configured guest limit/);
+	assert.match(metrics[0].tooltip, /8192 B guest limit/);
 	assert.match(metrics[1].tooltip, /256 B target/);
-	assert.match(metrics[2].tooltip, /100 B allocated blocks \/ 30000 B logical file size/);
+	assert.match(metrics[2].tooltip, /100 B allocated \/ 30000 B logical/);
 	// Neither reclaim nor sparse allocation is a guest pressure percentage.
 	assert.ok(metrics.every((metric) => !('percent' in metric)));
 });
@@ -119,5 +117,5 @@ test('partial samples show the available gauge without substituting guest values
 	assert.equal(metrics.length, 1);
 	assert.equal(metrics[0].label, 'IMAGE');
 	assert.equal(metrics[0].value, '0 B');
-	assert.match(metrics[0].tooltip, /— logical file size/);
+	assert.match(metrics[0].tooltip, /— logical/);
 });
