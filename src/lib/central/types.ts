@@ -176,8 +176,6 @@ export type VMResources = {
 	diskCapacityGiB?: number;
 	memoryResidentBytes?: number;
 	memoryLimitBytes?: number;
-	balloonTargetBytes?: number;
-	balloonInflatedBytes?: number;
 	diskAllocatedBytes?: number;
 	diskLogicalBytes?: number;
 	diskTotalBytes?: number;

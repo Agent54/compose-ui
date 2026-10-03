@@ -85,13 +85,11 @@ test('old runtime responses and unavailable samples do not invent zero usage', (
 	}
 });
 
-test('zero balloon inflation remains visible alongside resident RAM and sparse allocation', () => {
+test('host gauges show resident RAM with its guest limit and sparse allocation', () => {
 	const metrics = vmHostMetrics(
 		{
 			memoryResidentBytes: 1024,
 			memoryLimitBytes: 8192,
-			balloonTargetBytes: 256,
-			balloonInflatedBytes: 0,
 			diskAllocatedBytes: 100,
 			diskLogicalBytes: 30000
 		},
@@ -101,14 +99,12 @@ test('zero balloon inflation remains visible alongside resident RAM and sparse a
 		metrics.map(({ label, value }) => ({ label, value })),
 		[
 			{ label: 'HOST RAM', value: '1024 B' },
-			{ label: 'BALLOON', value: '0 B' },
 			{ label: 'IMAGE', value: '100 B' }
 		]
 	);
 	assert.match(metrics[0].tooltip, /8192 B guest limit/);
-	assert.match(metrics[1].tooltip, /256 B target/);
-	assert.match(metrics[2].tooltip, /100 B allocated \/ 30000 B logical/);
-	// Neither reclaim nor sparse allocation is a guest pressure percentage.
+	assert.match(metrics[1].tooltip, /100 B allocated \/ 30000 B logical/);
+	// Neither resident RAM nor sparse allocation is a guest pressure percentage.
 	assert.ok(metrics.every((metric) => !('percent' in metric)));
 });
 

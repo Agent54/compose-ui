@@ -36,8 +36,6 @@ export function vmDiskMetrics(resources: VMResources | undefined, formatBytes: B
 }
 
 // These gauges describe the VM on the host, separately from guest usage.
-// Reclaimed free pages are not the same as an inflated balloon; a zero
-// balloon is a valid reading and says nothing about resident RAM by itself.
 export function vmHostMetrics(resources: VMResources | undefined, formatBytes: ByteFormatter) {
 	const metrics = [];
 	if (resources?.memoryResidentBytes !== undefined) {
@@ -45,13 +43,6 @@ export function vmHostMetrics(resources: VMResources | undefined, formatBytes: B
 			label: 'HOST RAM',
 			value: formatBytes(resources.memoryResidentBytes),
 			tooltip: `VM resident memory\n${formatBytes(resources.memoryResidentBytes)} resident / ${formatBytes(resources.memoryLimitBytes)} guest limit`
-		});
-	}
-	if (resources?.balloonInflatedBytes !== undefined) {
-		metrics.push({
-			label: 'BALLOON',
-			value: formatBytes(resources.balloonInflatedBytes),
-			tooltip: `VM balloon\n${formatBytes(resources.balloonInflatedBytes)} inflated / ${formatBytes(resources.balloonTargetBytes)} target`
 		});
 	}
 	metrics.push({
