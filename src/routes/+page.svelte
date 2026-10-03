@@ -8,6 +8,7 @@
 	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
 	import { isReplacementBuild, latestBuildFailure, mergeBuilds } from '$lib/central/build-state';
 	import { vmDiskMetrics, vmHostMetrics } from '$lib/central/vm-resource-metrics';
+	import DiskUsagePage from '$lib/components/DiskUsagePage.svelte';
 	import {
 		buildCompletion,
 		parseOutputMessage,
@@ -322,6 +323,17 @@
 	let systemInfo = $state<Record<string, unknown> | null>(null);
 	let systemResourcesRefreshing = false;
 	let runtimeStatus = $state<RuntimeStatus | null>(null);
+	let diskPageOpen = $state(browser && window.location.hash === '#disk-usage');
+	function openDiskUsage() {
+		if (diskPageOpen) return;
+		diskPageOpen = true;
+		window.history.pushState(null, '', '#disk-usage');
+	}
+	function closeDiskUsage() {
+		diskPageOpen = false;
+		writeSelectionHash(selectedProjectId, selectedContainerId);
+		if (!selectedProjectId) window.history.replaceState(null, '', window.location.pathname + window.location.search);
+	}
 	let projectResources = $state<ProjectResources | null>(null);
 	let pendingHashSelection = $state<HashSelection | null>(
 		browser ? parseSelectionHash(window.location.hash) : null
@@ -440,7 +452,7 @@
 	});
 
 	$effect(() => {
-		if (pendingHashSelection || !selectedProjectId) {
+		if (diskPageOpen || pendingHashSelection || !selectedProjectId) {
 			return;
 		}
 
@@ -1758,6 +1770,7 @@
 
 	onMount(() => {
 		const handleHashChange = () => {
+			diskPageOpen = window.location.hash === '#disk-usage';
 			pendingHashSelection = parseSelectionHash(window.location.hash);
 		};
 
@@ -3143,11 +3156,13 @@
 	}
 
 	function handleProjectSelect(projectId: string) {
+		diskPageOpen = false;
 		contextMenu = null;
 		selectProject(projectId);
 	}
 
 	function handleContainerSelect(projectId: string, serviceId: string) {
+		diskPageOpen = false;
 		contextMenu = null;
 		selectContainer(projectId, serviceId);
 	}
@@ -3357,7 +3372,7 @@
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
-<div class="workspace" style={`--sidebar-width:${sidebarWidth}px;`}>
+<div class="workspace" class:disk-page-open={diskPageOpen} style={`--sidebar-width:${sidebarWidth}px;`}>
 	<aside class="sidebar">
 		<div class="sidebar-controls">
 			<label class="sort-menu">
@@ -3415,6 +3430,9 @@
 			</span>
 		</div>
 
+		<button class="resource-chip disk-link mobile-disk-link" type="button" onclick={openDiskUsage} aria-label="Open VM disk usage">
+			<span>VM DISK FREE</span><strong>{vmDiskMetrics(runtimeStatus?.vmResources, formatBytes)[0].value}</strong>
+		</button>
 		<div class="tree" role="tree" aria-label="Compose projects">
 			{#if visibleProjects.length}
 				{#each visibleProjects as project (project.id)}
@@ -3605,7 +3623,7 @@
 	<main class="panel">
 		<header class="panel-header">
 			<div class="panel-heading">
-				<h2>{selectedProject?.name ?? 'Compose Projects'}</h2>
+				<h2>{diskPageOpen ? 'VM storage' : selectedProject?.name ?? 'Compose Projects'}</h2>
 			</div>
 			<div class="resource-strip" aria-label="Resource usage">
 				{#if diskBuildFailure}
@@ -3654,14 +3672,18 @@
 				<div class="resource-group">
 					<span class="resource-group-label">VM</span>
 					{#each vmMetrics() as metric (`vm-${metric.label}`)}
-						<span
-							class="resource-chip"
-							data-pressure={metric.pressure ?? resourcePressure(metric.percent)}
-							data-tooltip={resourceMetricTooltip(metric)}
-						>
-							<span>{metric.label}</span>
-							<strong>{metric.value}</strong>
-						</span>
+						{#if metric.label === 'DISK FREE'}
+							<button type="button" class="resource-chip disk-link" aria-label="Open VM disk usage" aria-pressed={diskPageOpen} onclick={openDiskUsage} data-pressure={metric.pressure ?? resourcePressure(metric.percent)} data-tooltip={`${resourceMetricTooltip(metric)}\nOpen disk usage and cleanup candidates`}><span>{metric.label}</span><strong>{metric.value}</strong></button>
+						{:else}
+							<span
+								class="resource-chip"
+								data-pressure={metric.pressure ?? resourcePressure(metric.percent)}
+								data-tooltip={resourceMetricTooltip(metric)}
+							>
+								<span>{metric.label}</span>
+								<strong>{metric.value}</strong>
+							</span>
+						{/if}
 					{/each}
 				</div>
 				{#if selectedProject}
@@ -3701,6 +3723,9 @@
 			</button>
 		</header>
 
+		{#if diskPageOpen}
+			<DiskUsagePage ui={uiState} runtime={runtimeStatus} onclose={closeDiskUsage} />
+		{:else}
 		<div class="content-grid">
 			<section class="card summary-card">
 				<div class="card-header">
@@ -4114,6 +4139,7 @@
 				{/if}
 			</section>
 		</div>
+		{/if}
 	</main>
 
 	{#if toasts.length}
@@ -5003,6 +5029,11 @@
 		white-space: nowrap;
 	}
 
+	.disk-link { border: 1px solid var(--app-border-strong); cursor: pointer; }
+	.disk-link:hover { background: var(--app-control-hover); }
+	.disk-link:focus-visible { outline: 2px solid #1d9bf0 !important; outline-offset: 3px; }
+	.mobile-disk-link { display: none; }
+
 	.resource-chip strong {
 		color: var(--app-text);
 		font-size: 0.7rem;
@@ -5702,6 +5733,9 @@
 	}
 
 	@media (max-width: 700px) {
+		.workspace.disk-page-open .panel { display: flex; }
+		.workspace.disk-page-open .sidebar { display: none; }
+		.mobile-disk-link { display: inline-flex; justify-self: start; margin: 0.5rem 0.75rem; }
 		.panel {
 			display: none;
 		}

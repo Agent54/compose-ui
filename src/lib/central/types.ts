@@ -173,6 +173,7 @@ export type RuntimeStatus = {
 };
 
 export type VMResources = {
+	diskCapacityGiB?: number;
 	memoryResidentBytes?: number;
 	memoryLimitBytes?: number;
 	balloonTargetBytes?: number;
