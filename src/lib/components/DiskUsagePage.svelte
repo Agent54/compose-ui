@@ -1,7 +1,13 @@
 <script lang="ts">
-	import { onMount, untrack } from 'svelte';
+	import { onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import type { RuntimeStatus, UiState } from '$lib/central/types';
-	import { loadDiskUsage, type DiskUsage } from '$lib/central/disk-usage';
+	import {
+		loadDiskUsage,
+		loadDiskCleanup,
+		type DiskUsage,
+		type DiskCleanup
+	} from '$lib/central/disk-usage';
 
 	let {
 		ui,
@@ -16,11 +22,14 @@
 	let loading = $state(false);
 	let scanning = $state(false);
 	let error = $state('');
+	let cleanup = $state<DiskCleanup | null>(null);
+	let cleanupLoading = $state(false);
+	let cleanupError = $state('');
 	let filter = $state('all');
 	let showAll = $state(false);
 	let mounted = $state(false);
 	let initialLoadStarted = false;
-	const controllers = new Set<AbortController>();
+	const controllers = new SvelteSet<AbortController>();
 	const resources = $derived(runtime?.vmResources);
 	const total = $derived(resources?.diskTotalBytes);
 	const available = $derived(resources?.diskAvailableBytes);
@@ -82,8 +91,31 @@
 	function time(value: string) {
 		return new Date(value).toLocaleString();
 	}
+	async function refreshCleanup(run = false) {
+		if (!ui || cleanupLoading) return;
+		cleanupLoading = true;
+		cleanupError = '';
+		const controller = new AbortController();
+		controllers.add(controller);
+		try {
+			const result = await loadDiskCleanup(ui, run, controller.signal);
+			if (!mounted) return;
+			const finished = cleanup?.running && !result.running;
+			cleanup = result;
+			if (run || finished) {
+				usage = { ...usage, report: undefined, scanError: undefined };
+				if (finished) void refresh();
+			}
+		} catch (cause) {
+			if (mounted) cleanupError = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			controllers.delete(controller);
+			if (mounted) cleanupLoading = false;
+		}
+	}
 	async function refresh(scan = false) {
 		if (!ui || loading || scanning) return;
+		if (!scan) void refreshCleanup();
 		if (scan) scanning = true;
 		else loading = true;
 		error = '';
@@ -102,15 +134,19 @@
 			}
 		}
 	}
-	$effect(() => {
-		if (mounted && ui && !initialLoadStarted) {
-			initialLoadStarted = true;
-			untrack(() => void refresh());
-		}
-	});
 	onMount(() => {
 		mounted = true;
+		const update = () => {
+			if (!ui) return;
+			if (!initialLoadStarted) {
+				initialLoadStarted = true;
+				void refresh();
+			} else if (cleanup?.running) void refreshCleanup();
+		};
+		update();
+		const timer = setInterval(update, 2000);
 		return () => {
+			clearInterval(timer);
 			mounted = false;
 			for (const controller of controllers) controller.abort();
 		};
@@ -153,11 +189,53 @@
 				>
 			</p>
 			<p>
-				<span>Host allocation</span><strong
-					>{bytes(resources?.diskAllocatedBytes)}</strong
-				>
+				<span>Host allocation</span><strong>{bytes(resources?.diskAllocatedBytes)}</strong>
 			</p>
 		</div>
+	</section>
+
+	<section class="disk-section" aria-label="Storage cleanup">
+		<div class="section-heading">
+			<h3>Cleanup</h3>
+			<button
+				class="primary"
+				type="button"
+				onclick={() => void refreshCleanup(true)}
+				disabled={cleanupLoading ||
+					cleanup?.running ||
+					scanning ||
+					loading ||
+					!ui ||
+					runtime?.phase !== 'healthy' ||
+					!cleanup}>{cleanup?.running ? 'Cleaning…' : 'Run cleanup'}</button
+			>
+		</div>
+		{#if cleanup}
+			<p class="muted">
+				Unused images older than {cleanup.imageMinimumAgeHours}h · Cache {cleanup.buildCacheLimit} · Every
+				{cleanup.intervalHours}h
+			</p>
+			<p class="muted sample-time" role="status">
+				{#if cleanup.running}Cleaning…
+				{:else if cleanup.completedAt}Last run {time(cleanup.completedAt)}
+				{:else if cleanup.lastAttemptAt}Last attempt {time(cleanup.lastAttemptAt)}
+				{:else}Not run{/if}
+				{#if !cleanup.running && cleanup.nextRunAt}
+					· Next {time(cleanup.nextRunAt)}{/if}
+			</p>
+			{#if cleanup.results.length}
+				<ul class="cleanup-results">
+					{#each cleanup.results as result (result.name)}
+						<li>
+							<span>{result.name}</span>
+							{#if result.error}<span class="error">{result.error}</span>
+							{:else}<strong>{bytes(result.reclaimedBytes)} reclaimed</strong>{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		{/if}
+		{#if cleanupError}<p class="error" role="alert">{cleanupError}</p>{/if}
 	</section>
 
 	<section class="disk-section">
@@ -185,14 +263,17 @@
 			<div class="table-scroll">
 				<table class="summary-table">
 					<thead
-						><tr><th>Type</th><th>Objects</th><th>Unused</th><th>Size</th><th>Reclaimable (est.)</th></tr
+						><tr
+							><th>Type</th><th>Objects</th><th>Unused</th><th>Size</th><th>Reclaimable (est.)</th
+							></tr
 						></thead
 					><tbody>
 						{#each categories as category (category.kind)}<tr
-								><th scope="row">{category.kind === 'containers' ? 'Container files' : category.label}</th><td
-									>{category.count}</td><td>{category.candidateCount}</td
-								><td>{bytes(category.totalBytes)}</td><td>{bytes(category.reclaimableBytes)}</td
-								></tr
+								><th scope="row"
+									>{category.kind === 'containers' ? 'Container files' : category.label}</th
+								><td>{category.count}</td><td>{category.candidateCount}</td><td
+									>{bytes(category.totalBytes)}</td
+								><td>{bytes(category.reclaimableBytes)}</td></tr
 							>{/each}
 					</tbody>
 				</table>
@@ -213,8 +294,7 @@
 			<div class="table-scroll">
 				<table>
 					<thead
-						><tr><th>Object</th><th>Size</th><th>Reclaimable (est.)</th><th>Status</th></tr
-						></thead
+						><tr><th>Object</th><th>Size</th><th>Reclaimable (est.)</th><th>Status</th></tr></thead
 					><tbody>
 						{#each visibleItems as item, index (`${item.kind}:${index}`)}<tr
 								><th scope="row" class="object-name"
@@ -270,6 +350,7 @@
 		margin: 0;
 	}
 	.actions {
+		flex-wrap: wrap;
 		display: flex;
 		gap: 0.5rem;
 	}
@@ -432,6 +513,26 @@
 	}
 	select {
 		margin-left: 0.4rem;
+	}
+	.cleanup-results {
+		list-style: none;
+		margin: 0.75rem 0 0;
+		padding: 0;
+		font-size: 0.76rem;
+	}
+	.cleanup-results li {
+		display: flex;
+		justify-content: space-between;
+		gap: 0.5rem 1rem;
+		flex-wrap: wrap;
+		padding: 0.25rem 0;
+	}
+	.cleanup-results strong {
+		font-weight: 550;
+		font-variant-numeric: tabular-nums;
+	}
+	.cleanup-results .error {
+		overflow-wrap: anywhere;
 	}
 	.volume-list {
 		list-style: none;
