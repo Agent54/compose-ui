@@ -4,6 +4,7 @@ export type DiskItem = {
 	id?: string;
 	group?: 'service' | 'shared' | 'dangling' | 'build-cache' | 'other';
 	services?: { project?: string; name: string }[];
+	serviceInferred?: boolean;
 	lastUsedAt?: string;
 	kind: string;
 	name: string;
@@ -97,7 +98,7 @@ async function requestDiskUsage<T>(
 		return payload as T;
 	} catch (error) {
 		if (controller.signal.aborted && !signal?.aborted) {
-			throw new Error('Disk usage request timed out.');
+			throw new Error('Disk usage request timed out.', { cause: error });
 		}
 		throw error;
 	} finally {

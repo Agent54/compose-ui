@@ -1,17 +1,21 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
+	import Icon from './Icon.svelte';
 	import {
+		attributeDiskObjects,
 		groupDiskObjects,
 		diskServiceLabel,
 		type DiskObjectSort,
 		type DiskSortDirection
 	} from '$lib/central/disk-objects';
 	import type { RuntimeStatus, UiState } from '$lib/central/types';
+	import { vmDiskMetrics } from '$lib/central/vm-resource-metrics';
 	import {
 		loadDiskUsage,
 		loadDiskCleanup,
 		type DiskUsage,
+		type DiskItem,
 		type DiskCleanup
 	} from '$lib/central/disk-usage';
 
@@ -37,15 +41,19 @@
 	let mounted = $state(false);
 	let initialLoadStarted = false;
 	const controllers = new SvelteSet<AbortController>();
+	const expandedRows = new SvelteSet<string>();
+	const collapsedGroups = new SvelteSet<string>(['build-cache', 'shared']);
 	const resources = $derived(runtime?.vmResources);
 	const total = $derived(resources?.diskTotalBytes);
 	const available = $derived(resources?.diskAvailableBytes);
 	const used = $derived(
 		total !== undefined && available !== undefined ? Math.max(0, total - available) : undefined
 	);
-	const percent = $derived(total && used !== undefined ? Math.min(100, (used / total) * 100) : 0);
+	const diskMetric = $derived(vmDiskMetrics(resources, bytes)[0]);
+	const percent = $derived(Math.min(100, Math.max(0, diskMetric.percent ?? 0)));
+	const attributedItems = $derived(attributeDiskObjects(usage.report?.items ?? []));
 	const items = $derived(
-		(usage.report?.items ?? []).filter((item) => filter === 'all' || item.kind === filter)
+		attributedItems.filter((item) => filter === 'all' || item.kind === filter)
 	);
 	const groups = $derived(groupDiskObjects(items, sort, direction));
 	const unusedVolumes = $derived(
@@ -100,6 +108,16 @@
 	}
 	function lastUsed(value: string) {
 		return new Date(value).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+	}
+	function totalBytes(value: number | undefined, partial: boolean) {
+		return `${bytes(value)}${partial ? ' +' : ''}`;
+	}
+	function status(unused: number, count: number) {
+		return unused === count ? 'Unused' : unused === 0 ? 'Retained' : `${unused} of ${count} unused`;
+	}
+	function toggleRow(id: string) {
+		if (expandedRows.has(id)) expandedRows.delete(id);
+		else expandedRows.add(id);
 	}
 	async function refreshCleanup(run = false) {
 		if (!ui || cleanupLoading) return;
@@ -163,17 +181,41 @@
 	});
 </script>
 
+{#snippet objectCells(item: DiskItem, nested = false)}
+	<th scope="row" class="object-name" class:cache-entry={nested} title={item.detail}>
+		{#if nested}<code>{item.id?.replace(/^build-cache:/, '') ?? item.name}</code>
+		{:else}{item.name}{/if}
+		<small>
+			{kindLabels[item.kind] ?? item.kind}
+			{#if item.services && item.services.length > 1}
+				· {item.services.map(diskServiceLabel).join(', ')}
+			{/if}
+			{#if item.serviceInferred}· Service name match{/if}
+			{#if item.kind === 'build-cache'}· {item.detail}{/if}
+		</small>
+		{#if nested}<small>{item.name}</small>
+		{:else if item.kind === 'build-cache' && item.id}
+			<small><code>{item.id.replace(/^build-cache:/, '')}</code></small>
+		{/if}
+	</th>
+	<td data-label="Size">{bytes(item.bytes)}</td>
+	<td data-label="Reclaimable (est.)">{bytes(item.reclaimableBytes)}</td>
+	<td data-label="Last used">
+		{#if item.lastUsedAt}<time datetime={item.lastUsedAt}>{lastUsed(item.lastUsedAt)}</time>
+		{:else}—{/if}
+	</td>
+	<td data-label="Status">{item.candidate ? 'Unused' : 'Retained'}</td>
+{/snippet}
+
 <div class="disk-page">
 	<div class="page-heading">
 		<h3>Disk</h3>
 		<button type="button" onclick={onclose}>Back to projects</button>
 	</div>
-	<section class="capacity" aria-label="VM disk capacity">
+	<section class="capacity" data-pressure={diskMetric.pressure} aria-label="VM disk capacity">
 		<div class="capacity-values">
 			<div>
-				<span>Free</span><strong class:low={available === 0 || percent >= 90}
-					>{bytes(available)}</strong
-				>
+				<span>Free</span><strong class="disk-free">{bytes(available)}</strong>
 			</div>
 			<div><span>Used + reserved</span><strong>{bytes(used)}</strong></div>
 			<div><span>Capacity</span><strong>{bytes(total)}</strong></div>
@@ -185,11 +227,11 @@
 			aria-valuemin="0"
 			aria-valuemax="100"
 			aria-valuenow={percent}
-			aria-valuetext={total === undefined
+			aria-valuetext={diskMetric.percent === undefined
 				? 'Unavailable'
 				: `${percent.toFixed(1)}% used and reserved`}
 		>
-			<div class:low={percent >= 90} style:width={`${percent}%`}></div>
+			<div style:width={`${percent}%`}></div>
 		</div>
 		<div class="capacity-footnotes">
 			<p>
@@ -329,49 +371,93 @@
 					</div>
 				</div>
 			</div>
-			<div class="table-scroll">
-				<table class="object-table" aria-label="Storage objects">
-					<thead>
-						<tr
-							><th>Object</th><th>Size</th><th>Reclaimable (est.)</th><th>Last used</th><th
-								>Status</th
-							></tr
-						>
-					</thead>
-					{#each groups as group (group.id)}
-						<tbody>
-							<tr class="group-heading">
-								<th scope="rowgroup" colspan="5">
-									{group.label}
-									<span class="group-count">
-										{group.items.length}
-										{group.items.length === 1 ? 'object' : 'objects'}
-									</span>
-								</th>
-							</tr>
-							{#each group.items as item, index (item.id ?? `${item.kind}:${item.name}:${index}`)}
-								<tr>
-									<th scope="row" class="object-name">
-										{item.name}<small
-											>{kindLabels[item.kind] ??
-												item.kind}{#if item.group === 'shared' && item.services?.length}
-												· {item.services.map(diskServiceLabel).join(', ')}{/if}</small
-										>
-									</th>
-									<td data-label="Size">{bytes(item.bytes)}</td>
-									<td data-label="Reclaimable (est.)">{bytes(item.reclaimableBytes)}</td>
-									<td data-label="Last used">
-										{#if item.lastUsedAt}<time datetime={item.lastUsedAt}
-												>{lastUsed(item.lastUsedAt)}</time
-											>{:else}—{/if}
-									</td>
-									<td data-label="Status">{item.candidate ? 'Unused' : 'Retained'}</td>
-								</tr>
-							{/each}
-						</tbody>
-					{/each}
-					{#if items.length === 0}<tbody><tr><td colspan="5">No objects</td></tr></tbody>{/if}
-				</table>
+			<p class="muted object-note">
+				Section totals sum reported object sizes; shared layers can overlap. + means some sizes are
+				unavailable.
+			</p>
+			<div class="object-groups">
+				{#each groups as group (group.id)}
+					<details
+						class="object-group"
+						open={!collapsedGroups.has(group.id)}
+						ontoggle={(event) => {
+							if (event.currentTarget.open) collapsedGroups.delete(group.id);
+							else collapsedGroups.add(group.id);
+						}}
+					>
+						<summary class="group-summary">
+							<span class="group-title">
+								<span class="group-chevron"><Icon name="chevron" size={15} /></span>
+								<strong>{group.label}</strong>
+								<span class="group-count"
+									>{group.items.length} {group.items.length === 1 ? 'object' : 'objects'}</span
+								>
+							</span>
+							<span class="group-totals">
+								<span
+									><small>Size</small><strong>{totalBytes(group.bytes, group.partialBytes)}</strong
+									></span
+								>
+								<span
+									><small>Reclaimable (est.)</small><strong
+										>{totalBytes(group.reclaimableBytes, group.partialReclaimableBytes)}</strong
+									></span
+								>
+							</span>
+						</summary>
+						<div class="table-scroll group-body">
+							<table class="object-table" aria-label={`${group.label} storage objects`}>
+								<colgroup><col class="name-column" /><col /><col /><col /><col /></colgroup>
+								<thead
+									><tr
+										><th>Object</th><th>Size</th><th>Reclaimable (est.)</th><th>Last used</th><th
+											>Status</th
+										></tr
+									></thead
+								>
+								<tbody>
+									{#each group.rows as row (row.id)}
+										{@const rowId = JSON.stringify([group.id, row.id])}
+										{#if row.items.length === 1}
+											<tr>{@render objectCells(row.items[0])}</tr>
+										{:else}
+											<tr>
+												<th scope="row" class="object-name">
+													<button
+														class="object-toggle"
+														type="button"
+														aria-expanded={expandedRows.has(rowId)}
+														onclick={() => toggleRow(rowId)}
+													>
+														<Icon name="chevron" size={13} rotated={expandedRows.has(rowId)} />
+														<span>{row.name}<small>{row.items.length} cache entries</small></span>
+													</button>
+												</th>
+												<td data-label="Size">{totalBytes(row.bytes, row.partialBytes)}</td>
+												<td data-label="Reclaimable (est.)"
+													>{totalBytes(row.reclaimableBytes, row.partialReclaimableBytes)}</td
+												>
+												<td data-label="Last used">
+													{#if row.lastUsedAt}<time datetime={row.lastUsedAt}
+															>{lastUsed(row.lastUsedAt)}</time
+														><small>Latest</small>
+													{:else}—{/if}
+												</td>
+												<td data-label="Status">{status(row.candidateCount, row.items.length)}</td>
+											</tr>
+											{#if expandedRows.has(rowId)}
+												{#each row.items as item, index (item.id ?? `${item.kind}:${item.name}:${index}`)}
+													<tr class="entry-row">{@render objectCells(item, true)}</tr>
+												{/each}
+											{/if}
+										{/if}
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					</details>
+				{/each}
+				{#if items.length === 0}<p class="muted">No objects</p>{/if}
 			</div>
 		{/if}
 	</section>
@@ -440,7 +526,8 @@
 		background: var(--app-control-hover);
 	}
 	button:focus-visible,
-	select:focus-visible {
+	select:focus-visible,
+	summary:focus-visible {
 		outline: 2px solid #1d9bf0 !important;
 		outline-offset: 3px;
 	}
@@ -485,10 +572,18 @@
 		height: 100%;
 		background: #8e98a3;
 	}
-	.capacity-track div.low {
+	.capacity[data-pressure='warning'] .disk-free {
+		color: #f0c36a;
+	}
+	.capacity[data-pressure='critical'] .disk-free {
+		color: #f28a86;
+	}
+	.capacity[data-pressure='warning'] .capacity-track div {
+		background: #d9a441;
+	}
+	.capacity[data-pressure='critical'] .capacity-track div {
 		background: #dc625f;
 	}
-	.low,
 	.error {
 		color: #dc625f;
 	}
@@ -565,6 +660,11 @@
 		overflow-wrap: anywhere;
 		max-width: 26rem;
 	}
+	td small {
+		display: block;
+		font-size: 0.66rem;
+		margin-top: 0.15rem;
+	}
 	.item-heading {
 		margin-top: 1.25rem;
 	}
@@ -579,14 +679,126 @@
 		align-items: center;
 		gap: 0.4rem;
 	}
-	.object-table .group-heading th {
-		background: var(--app-surface-active);
-		padding: 0.55rem 0.6rem;
-		font-size: 0.75rem;
+	.object-note {
+		font-size: 0.69rem;
+		margin: 0.65rem 0 1rem;
+	}
+	.object-groups {
+		display: grid;
+		gap: 1.25rem;
+	}
+	.group-summary {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem 1.5rem;
+		padding: 0.55rem 0.2rem;
+		border-radius: 0.3rem;
+		cursor: pointer;
+		list-style: none;
+	}
+	.group-summary::-webkit-details-marker {
+		display: none;
+	}
+	.group-summary:hover {
+		background: var(--app-surface-hover);
+	}
+	.group-title {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		min-width: 0;
+		flex-wrap: wrap;
+	}
+	.group-title strong {
+		font-size: 0.88rem;
+		font-weight: 650;
 		overflow-wrap: anywhere;
 	}
+	.group-chevron {
+		display: flex;
+		color: var(--app-text-muted);
+		flex: none;
+	}
+	.object-group[open] > summary .group-chevron {
+		transform: rotate(90deg);
+	}
+	.group-body {
+		margin: 0 0 0 2.7rem;
+	}
+	.group-totals {
+		display: flex;
+		gap: 1.5rem;
+		flex: none;
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+	.group-totals small,
+	.group-totals strong {
+		display: block;
+	}
+	.group-totals small {
+		font-size: 0.64rem;
+	}
+	.group-totals strong {
+		font-size: 0.82rem;
+		font-weight: 600;
+	}
+	.object-table {
+		table-layout: fixed;
+	}
+	.name-column {
+		width: 42%;
+	}
+	.object-table col:nth-child(2) {
+		width: 12%;
+	}
+	.object-table col:nth-child(3) {
+		width: 16%;
+	}
+	.object-table col:nth-child(4) {
+		width: 19%;
+	}
+	.object-table col:nth-child(5) {
+		width: 11%;
+	}
+	.object-table td {
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+	.object-table th:first-child {
+		padding-left: 0;
+	}
+	.object-table tbody > tr:last-child > th,
+	.object-table tbody > tr:last-child > td {
+		border-bottom: 0;
+	}
+	.object-toggle {
+		display: flex;
+		align-items: baseline;
+		gap: 0.35rem;
+		text-align: left;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		font-size: inherit;
+		font-weight: inherit;
+		width: 100%;
+	}
+	.object-toggle span {
+		min-width: 0;
+	}
+	.object-toggle:hover {
+		background: transparent;
+		color: #1d9bf0;
+	}
+	.entry-row {
+		background: var(--app-surface-raised);
+	}
+	.object-table .cache-entry {
+		padding-left: 1rem;
+	}
 	.group-count {
-		margin-left: 0.75rem;
 		color: var(--app-text-muted);
 		font-size: 0.68rem;
 		font-weight: 400;
@@ -645,6 +857,24 @@
 		overflow-wrap: anywhere;
 	}
 	@media (max-width: 700px) {
+		.group-summary {
+			flex-wrap: wrap;
+			gap: 0.4rem;
+		}
+		.group-title {
+			width: 100%;
+		}
+		.group-totals {
+			margin-left: 1.5rem;
+			text-align: left;
+			gap: 1.25rem;
+		}
+		.group-body {
+			margin-left: 2.4rem;
+		}
+		.object-table colgroup {
+			display: none;
+		}
 		.object-controls {
 			gap: 0.5rem;
 		}
@@ -670,8 +900,7 @@
 			min-width: 0;
 			white-space: normal;
 		}
-		.object-table .object-name,
-		.object-table .group-heading th {
+		.object-table .object-name {
 			grid-column: 1 / -1;
 			max-width: none;
 		}
@@ -685,9 +914,6 @@
 			color: var(--app-text-muted);
 			font-size: 0.66rem;
 			margin-bottom: 0.15rem;
-		}
-		.object-table .group-heading {
-			padding: 0;
 		}
 		.disk-page {
 			padding: 1rem;
