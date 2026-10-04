@@ -1,6 +1,10 @@
 import type { UiState } from './types';
 
 export type DiskItem = {
+	id?: string;
+	group?: 'service' | 'shared' | 'dangling' | 'build-cache' | 'other';
+	services?: { project?: string; name: string }[];
+	lastUsedAt?: string;
 	kind: string;
 	name: string;
 	bytes?: number;

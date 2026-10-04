@@ -1,6 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
+	import {
+		groupDiskObjects,
+		diskServiceLabel,
+		type DiskObjectSort,
+		type DiskSortDirection
+	} from '$lib/central/disk-objects';
 	import type { RuntimeStatus, UiState } from '$lib/central/types';
 	import {
 		loadDiskUsage,
@@ -26,7 +32,8 @@
 	let cleanupLoading = $state(false);
 	let cleanupError = $state('');
 	let filter = $state('all');
-	let showAll = $state(false);
+	let sort = $state<DiskObjectSort>('size');
+	let direction = $state<DiskSortDirection>('desc');
 	let mounted = $state(false);
 	let initialLoadStarted = false;
 	const controllers = new SvelteSet<AbortController>();
@@ -40,7 +47,7 @@
 	const items = $derived(
 		(usage.report?.items ?? []).filter((item) => filter === 'all' || item.kind === filter)
 	);
-	const visibleItems = $derived(showAll ? items : items.slice(0, 100));
+	const groups = $derived(groupDiskObjects(items, sort, direction));
 	const unusedVolumes = $derived(
 		usage.inventory?.volumes.filter((volume) => volume.references === 0) ?? []
 	);
@@ -90,6 +97,9 @@
 	}
 	function time(value: string) {
 		return new Date(value).toLocaleString();
+	}
+	function lastUsed(value: string) {
+		return new Date(value).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
 	}
 	async function refreshCleanup(run = false) {
 		if (!ui || cleanupLoading) return;
@@ -281,37 +291,86 @@
 		{:else}<p class="muted">{loading ? 'Loading…' : 'Unavailable'}</p>{/if}
 		{#if usage.report}
 			<div class="section-heading item-heading">
-				<h3>Largest objects</h3>
-				<label
-					>Type <select bind:value={filter}
-						><option value="all">All categories</option><option value="images">Images</option
-						><option value="containers">Container files</option><option value="volumes"
-							>Volumes</option
-						><option value="build-cache">Build cache</option></select
-					></label
-				>
+				<h3>Objects</h3>
+				<div class="object-controls">
+					<label
+						>Type
+						<select bind:value={filter}>
+							<option value="all">All categories</option>
+							<option value="images">Images</option>
+							<option value="containers">Container files</option>
+							<option value="volumes">Volumes</option>
+							<option value="build-cache">Build cache</option>
+						</select>
+					</label>
+					<div class="sort-control">
+						<label
+							>Sort
+							<select
+								bind:value={sort}
+								onchange={() => (direction = sort === 'last-used' ? 'asc' : 'desc')}
+							>
+								<option value="size">Size</option>
+								<option value="reclaimable">Reclaimable</option>
+								<option value="last-used">Last used</option>
+							</select>
+						</label>
+						<button
+							type="button"
+							class="sort-direction"
+							aria-label={direction === 'desc' ? 'Sort ascending' : 'Sort descending'}
+							title={direction === 'desc' ? 'Descending' : 'Ascending'}
+							onclick={() => (direction = direction === 'desc' ? 'asc' : 'desc')}
+						>
+							<span aria-hidden="true">{direction === 'desc' ? '↓' : '↑'}</span>
+						</button>
+					</div>
+				</div>
 			</div>
 			<div class="table-scroll">
-				<table>
-					<thead
-						><tr><th>Object</th><th>Size</th><th>Reclaimable (est.)</th><th>Status</th></tr></thead
-					><tbody>
-						{#each visibleItems as item, index (`${item.kind}:${index}`)}<tr
-								><th scope="row" class="object-name"
-									>{item.name}<small>{kindLabels[item.kind] ?? item.kind}</small></th
-								><td>{bytes(item.bytes)}</td><td>{bytes(item.reclaimableBytes)}</td><td
-									>{item.candidate ? 'Unused' : 'Retained'}</td
-								></tr
-							>{/each}
-						{#if items.length === 0}<tr><td colspan="4">No objects</td></tr>{/if}
-					</tbody>
+				<table class="object-table" aria-label="Storage objects">
+					<thead>
+						<tr
+							><th>Object</th><th>Size</th><th>Reclaimable (est.)</th><th>Last used</th><th
+								>Status</th
+							></tr
+						>
+					</thead>
+					{#each groups as group (group.id)}
+						<tbody>
+							<tr class="group-heading">
+								<th scope="rowgroup" colspan="5">
+									{group.label}
+									<span class="group-count">
+										{group.items.length}
+										{group.items.length === 1 ? 'object' : 'objects'}
+									</span>
+								</th>
+							</tr>
+							{#each group.items as item, index (item.id ?? `${item.kind}:${item.name}:${index}`)}
+								<tr>
+									<th scope="row" class="object-name">
+										{item.name}<small
+											>{kindLabels[item.kind] ??
+												item.kind}{#if item.group === 'shared' && item.services?.length}
+												· {item.services.map(diskServiceLabel).join(', ')}{/if}</small
+										>
+									</th>
+									<td data-label="Size">{bytes(item.bytes)}</td>
+									<td data-label="Reclaimable (est.)">{bytes(item.reclaimableBytes)}</td>
+									<td data-label="Last used">
+										{#if item.lastUsedAt}<time datetime={item.lastUsedAt}
+												>{lastUsed(item.lastUsedAt)}</time
+											>{:else}—{/if}
+									</td>
+									<td data-label="Status">{item.candidate ? 'Unused' : 'Retained'}</td>
+								</tr>
+							{/each}
+						</tbody>
+					{/each}
+					{#if items.length === 0}<tbody><tr><td colspan="5">No objects</td></tr></tbody>{/if}
 				</table>
 			</div>
-			{#if items.length > 100 && !showAll}<button
-					class="show-more"
-					type="button"
-					onclick={() => (showAll = true)}>Show all {items.length} objects</button
-				>{/if}
 		{/if}
 	</section>
 
@@ -507,6 +566,35 @@
 	.item-heading {
 		margin-top: 1.25rem;
 	}
+	.object-controls {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+		flex-wrap: wrap;
+	}
+	.sort-control {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+	.object-table .group-heading th {
+		background: var(--app-surface-active);
+		padding: 0.55rem 0.6rem;
+		font-size: 0.75rem;
+		overflow-wrap: anywhere;
+	}
+	.group-count {
+		margin-left: 0.75rem;
+		color: var(--app-text-muted);
+		font-size: 0.68rem;
+		font-weight: 400;
+		white-space: nowrap;
+	}
+	.sort-direction {
+		min-width: 2rem;
+		font-size: 0.9rem;
+		padding: 0.25rem 0.5rem;
+	}
 	.item-heading label {
 		font-size: 0.72rem;
 		color: var(--app-text-muted);
@@ -554,10 +642,51 @@
 		font-family: 'SF Mono', Monaco, monospace;
 		overflow-wrap: anywhere;
 	}
-	.show-more {
-		margin-top: 0.5rem;
-	}
 	@media (max-width: 700px) {
+		.object-controls {
+			gap: 0.5rem;
+		}
+		.object-controls select {
+			padding-inline: 0.5rem;
+		}
+		.object-table,
+		.object-table tbody {
+			display: block;
+		}
+		.object-table thead {
+			display: none;
+		}
+		.object-table tr {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			border-bottom: 1px solid var(--app-border);
+			padding-bottom: 0.4rem;
+		}
+		.object-table th,
+		.object-table td {
+			border-bottom: 0;
+			min-width: 0;
+			white-space: normal;
+		}
+		.object-table .object-name,
+		.object-table .group-heading th {
+			grid-column: 1 / -1;
+			max-width: none;
+		}
+		.object-table td {
+			padding-top: 0.2rem;
+			padding-bottom: 0.35rem;
+		}
+		.object-table td::before {
+			content: attr(data-label);
+			display: block;
+			color: var(--app-text-muted);
+			font-size: 0.66rem;
+			margin-bottom: 0.15rem;
+		}
+		.object-table .group-heading {
+			padding: 0;
+		}
 		.disk-page {
 			padding: 1rem;
 		}
