@@ -222,8 +222,10 @@
 		</div>
 		{#if cleanup}
 			<p class="muted">
-				Unused images older than {cleanup.imageMinimumAgeHours}h · Cache {cleanup.buildCacheLimit} · Every
-				{cleanup.intervalHours}h
+				Unused images older than {cleanup.imageMinimumAgeHours}h · Cache {cleanup.buildCacheLimit}
+				{#if cleanup.buildCacheMinimumFreeDiskPercent !== undefined}
+					· Free disk ≥ {cleanup.buildCacheMinimumFreeDiskPercent}%{/if}
+				· Every {cleanup.intervalHours}h
 			</p>
 			<p class="muted sample-time" role="status">
 				{#if cleanup.running}Cleaning…

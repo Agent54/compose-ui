@@ -47,6 +47,7 @@ export type DiskCleanup = {
 	imageMinimumAgeHours: number;
 	intervalHours: number;
 	buildCacheLimit: string;
+	buildCacheMinimumFreeDiskPercent?: number;
 	results: { name: string; reclaimedBytes?: number; error?: string }[];
 };
 
