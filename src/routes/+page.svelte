@@ -6,6 +6,8 @@
 
 	import Icon from '$lib/components/Icon.svelte';
 	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
+	import ShellLink from '$lib/components/ShellLink.svelte';
+	import { containerShellTarget, shellActionLabel } from '$lib/shell/launch';
 	import { isReplacementBuild, latestBuildFailure, mergeBuilds } from '$lib/central/build-state';
 	import { vmDiskMetrics, vmHostMetrics } from '$lib/central/vm-resource-metrics';
 	import DiskUsagePage from '$lib/components/DiskUsagePage.svelte';
@@ -3416,6 +3418,9 @@
 		<button class="resource-chip disk-link mobile-disk-link" type="button" onclick={openDiskUsage} aria-label="Open VM disk usage">
 			<span>VM DISK FREE</span><strong>{vmDiskMetrics(runtimeStatus?.vmResources, formatBytes)[0].value}</strong>
 		</button>
+		<div class="mobile-shell-link">
+			<ShellLink config={uiState} target={{ kind: 'vm' }} label="Open VM shell" />
+		</div>
 		<div class="tree" role="tree" aria-label="Compose projects">
 			{#if visibleProjects.length}
 				{#each visibleProjects as project (project.id)}
@@ -3574,6 +3579,7 @@
 						{#if expandedProjectIds.has(project.id)}
 							<ProjectServicesList
 								{project}
+								shellConfig={uiState}
 								{selectedContainerId}
 								{busyAction}
 								buildingServiceId={activeBuildTarget(project.id)?.serviceId}
@@ -3695,6 +3701,7 @@
 					</div>
 				{/if}
 			</div>
+			<ShellLink config={uiState} target={{ kind: 'vm' }} label="Open VM shell" />
 			<button
 				class="status-line"
 				type="button"
@@ -3822,18 +3829,27 @@
 										</div>
 									</button>
 
-									{#if service.state === 'running'}
-										<a
-											class="service-overview-link"
-											href={composeServiceUrl(service)}
-											target="_blank"
-											rel="external noreferrer"
-											aria-label={`Open ${service.serviceName} in browser`}
-										>
-											<Icon name="link" size={13} />
-											<span>Open</span>
-										</a>
-									{/if}
+									<div class="service-overview-actions">
+										<ShellLink
+											config={uiState}
+											target={containerShellTarget(selectedProject, service)}
+											label={`${shellActionLabel(service.state)} for ${service.serviceName}`}
+											compact
+											disabled={busyAction !== null}
+										/>
+										{#if service.state === 'running'}
+											<a
+												class="service-overview-link"
+												href={composeServiceUrl(service)}
+												target="_blank"
+												rel="external noreferrer"
+												aria-label={`Open ${service.serviceName} in browser`}
+											>
+												<Icon name="link" size={13} />
+												<span>Open</span>
+											</a>
+										{/if}
+									</div>
 								</div>
 
 								{#if serviceLogOpen(selectedProject, service)}
@@ -5026,6 +5042,7 @@
 	.disk-link:hover { background: var(--app-control-hover); }
 	.disk-link:focus-visible { outline: 2px solid #1d9bf0 !important; outline-offset: 3px; }
 	.mobile-disk-link { display: none; }
+	.mobile-shell-link { display: none; }
 
 	.resource-chip strong {
 		color: var(--app-text);
@@ -5279,15 +5296,22 @@
 		text-align: left;
 	}
 
+	.service-log-button { padding-right: 3.3rem; }
 	.service-log-button-linked {
-		padding-right: 5.5rem;
+		padding-right: 7.7rem;
 	}
 
-	.service-overview-link {
+	.service-overview-actions {
 		position: absolute;
 		top: 50%;
 		transform: translateY(-50%);
 		right: 0.55rem;
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+	}
+
+	.service-overview-link {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -5726,6 +5750,7 @@
 	}
 
 	@media (max-width: 700px) {
+		.mobile-shell-link { display: block; margin: 0 0.75rem 0.5rem; }
 		.workspace.disk-page-open .panel { display: flex; }
 		.workspace.disk-page-open .sidebar { display: none; }
 		.mobile-disk-link { display: inline-flex; justify-self: start; margin: 0.5rem 0.75rem; }

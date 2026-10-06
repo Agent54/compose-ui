@@ -5,6 +5,8 @@
 	import { latestBuildFailure } from '$lib/central/build-state';
 	import type { ComposeBuild } from '$lib/central/types';
 	import Icon from '$lib/components/Icon.svelte';
+	import ShellLink from '$lib/components/ShellLink.svelte';
+	import { containerShellTarget, shellActionLabel, type ShellConfig } from '$lib/shell/launch';
 	import {
 		composeServiceUrl,
 		isExpectedServiceStop,
@@ -16,6 +18,7 @@
 
 	let {
 		project,
+		shellConfig,
 		selectedContainerId,
 		busyAction,
 		buildingServiceId,
@@ -30,6 +33,7 @@
 		onWatchingToggle
 	}: {
 		project: ComposeProject;
+		shellConfig: ShellConfig | null | undefined;
 		selectedContainerId: string;
 		busyAction: string | null;
 		buildingServiceId?: string;
@@ -266,6 +270,13 @@
 				<span class="row-tooltip-bubble" aria-hidden="true">{serviceRowTooltipText(service)}</span>
 
 				<div class="row-actions">
+					<ShellLink
+						config={shellConfig}
+						target={containerShellTarget(project, service)}
+						label={`${shellActionLabel(service.state)} for ${service.serviceName}`}
+						compact
+						disabled={busyAction !== null}
+					/>
 					{#if service.state === 'running'}
 						<span class="tooltip-anchor" data-tooltip={`Open ${composeServiceUrl(service)}`}>
 							<a
@@ -531,9 +542,22 @@
 		z-index: 3;
 	}
 
-	.service-row:hover .row-actions {
+	.service-row:hover .row-actions,
+	.service-row:focus-within .row-actions {
 		opacity: 1;
 		pointer-events: auto;
+	}
+
+	@media (hover: none) {
+		.row-actions {
+			position: static;
+			transform: none;
+			opacity: 1;
+			pointer-events: auto;
+		}
+		.service-row {
+			flex-wrap: wrap;
+		}
 	}
 
 	.overlay-button {

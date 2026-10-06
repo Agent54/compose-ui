@@ -44,6 +44,17 @@ For Docker Compose Watch:
 docker compose watch
 ```
 
+## Interactive shells
+
+Container Shell actions and the header's VM Shell action open a standalone terminal in a new
+browser tab. The terminal uses xterm.js with resize, search, Unicode, accessibility controls,
+and optional WebGL rendering. Stopped containers request a start before opening Bash, with
+`sh` as a fallback for images without Bash. The server determines the current container state.
+
+Real shell access requires the session/PTY backend described in
+[the shell agent handover](docs/shell-handover.md), which includes the engine comparison,
+HTTP/WebSocket contract, and work for the Compose, launcher, smolvm, and worker agents.
+
 ## Building
 
 To create the production static assets:
