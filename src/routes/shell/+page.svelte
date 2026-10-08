@@ -1,19 +1,42 @@
 <script lang="ts">
 	import '@xterm/xterm/css/xterm.css';
 	import Icon from '$lib/components/Icon.svelte';
+	import ShellSessions from '$lib/components/ShellSessions.svelte';
+	import ShellCommandInput from '$lib/components/ShellCommandInput.svelte';
+	import { commandHistoryScope } from '$lib/shell/history';
 	import { parseShellLaunch, type ShellLaunch } from '$lib/shell/launch';
-	import { createShellTerminal, type ShellTerminal } from '$lib/shell/terminal';
+	import {
+		createShellTerminal,
+		type ShellTerminal,
+		type ShellSessionState
+	} from '$lib/shell/terminal';
 	import type { ShellStatus } from '$lib/shell/transport';
 
 	let launch = $state<ShellLaunch | null>(null);
+	let origin = $state('');
 	let status = $state<ShellStatus>({ phase: 'connecting', message: 'Loading terminal…' });
 	let dimensions = $state('');
 	let query = $state('');
+	let commandDraft = $state('');
 	let searchMessage = $state('');
 	let screenReader = $state(false);
+	let busy = $state(false);
+	let sessionState = $state<ShellSessionState>({
+		sessions: [],
+		activeId: '',
+		backend: 'live',
+		demoReason: '',
+		error: ''
+	});
 	let controller = $state.raw<ShellTerminal | null>(null);
 	let searchInput: HTMLInputElement;
 	const title = $derived(launch?.target.kind === 'container' ? launch.target.name : 'VM Shell');
+	const activeSession = $derived(
+		sessionState.sessions.find((session) => session.id === sessionState.activeId)
+	);
+	const historyScope = $derived(
+		launch && origin ? commandHistoryScope(launch, sessionState.backend, origin) : ''
+	);
 	const subtitle = $derived(
 		launch?.target.kind === 'container'
 			? `${launch.target.project} / ${launch.target.service}`
@@ -25,6 +48,7 @@
 		let terminal: ShellTerminal | undefined;
 		try {
 			const config = parseShellLaunch(window.location.hash, window.location.origin);
+			origin = window.location.origin;
 			launch = config;
 			void createShellTerminal(element, config, {
 				status: (next) => {
@@ -33,7 +57,10 @@
 				dimensions: (cols, rows) => {
 					if (!disposed) dimensions = `${cols} × ${rows}`;
 				},
-				find: () => searchInput?.focus()
+				find: () => searchInput?.focus(),
+				sessions: (next) => {
+					if (!disposed) sessionState = next;
+				}
 			})
 				.then((created) => {
 					terminal = created;
@@ -70,6 +97,15 @@
 	function disconnectOnLeave() {
 		controller?.dispose();
 	}
+	async function act(action: () => Promise<void>) {
+		if (busy) return;
+		busy = true;
+		try {
+			await action();
+		} finally {
+			busy = false;
+		}
+	}
 </script>
 
 <svelte:head>
@@ -93,6 +129,23 @@
 				<p>{subtitle}</p>
 			</div>
 		</div>
+		<ShellSessions
+			sessions={sessionState.sessions}
+			activeId={sessionState.activeId}
+			busy={busy || !controller || status.phase === 'connecting'}
+			onrefresh={() => {
+				void controller?.refreshSessions();
+			}}
+			onselect={(id) => {
+				void act(() => controller!.attachSession(id));
+			}}
+			onnew={() => {
+				void act(() => controller!.newSession());
+			}}
+			onclose={(id) => {
+				void act(() => controller!.closeSession(id));
+			}}
+		/>
 		<div class="connection" data-phase={status.phase} role="status">
 			<span class="connection-dot"></span>
 			{status.phase === 'connected'
@@ -100,18 +153,50 @@
 				: status.phase === 'connecting'
 					? 'Connecting'
 					: status.phase === 'closed'
-						? 'Exited'
+						? sessionState.activeId
+							? 'Exited'
+							: 'No session'
 						: 'Disconnected'}
 		</div>
+		{#if status.phase === 'error'}<button
+				type="button"
+				class="reconnect"
+				disabled={!controller || busy}
+				onclick={() => {
+					void act(() => controller!.reconnect());
+				}}
+				title="Reattach to the same session"><Icon name="refresh" size={13} />Reconnect</button
+			>{/if}
 		<button
 			type="button"
-			class="reconnect"
-			disabled={!controller || status.phase === 'connecting'}
-			onclick={() => controller?.reconnect()}
-			title="Close the current shell and open a new session"
-			><Icon name="refresh" size={13} />New session</button
+			class="close-current"
+			disabled={!controller || !sessionState.activeId || busy || status.phase === 'connecting'}
+			aria-label="Close current session"
+			title="Terminate and delete this session"
+			onclick={() => {
+				void act(() => controller!.closeSession(sessionState.activeId));
+			}}>× <span>Close session</span></button
 		>
 	</header>
+	{#if sessionState.backend === 'demo'}
+		<div class="demo-notice" role="status">
+			<span class="demo-badge">Demo</span><span
+				>No commands run on this container or VM.
+				{sessionState.demoReason.includes('Browser storage is unavailable')
+					? 'Sessions last until this tab closes.'
+					: 'Sessions are saved in this browser.'}
+				<small>{sessionState.demoReason}</small></span
+			>
+			<button
+				type="button"
+				disabled={!controller || busy || status.phase === 'connecting'}
+				onclick={() => {
+					void act(() => controller!.retryLive());
+				}}>Retry live backend</button
+			>
+		</div>
+	{/if}
+	{#if sessionState.error}<div class="notice error" role="alert">{sessionState.error}</div>{/if}
 
 	<div class="toolbar">
 		<form
@@ -187,12 +272,23 @@
 	{/if}
 
 	<div class="terminal" aria-label={`${title} terminal`} {@attach mountTerminal}></div>
+	{#if historyScope}
+		{#key historyScope}
+			<ShellCommandInput
+				bind:draft={commandDraft}
+				scope={historyScope}
+				cwd={activeSession?.cwd ?? ''}
+				sessionId={sessionState.activeId}
+				connected={status.phase === 'connected' && !busy}
+				onsend={(text) => controller?.sendCommand(text) ?? false}
+			/>
+		{/key}
+	{/if}
 	<footer>
 		<span>{status.shell ?? 'bash'}<span class="footer-separator">/</span>{dimensions || 'PTY'}</span
 		>
 		<span class="keyboard-help"
-			>Ctrl / ⌘ + Shift + F to find<span class="footer-separator">·</span>Ctrl / ⌘ + click to open
-			links</span
+			>Tab close detaches<span class="footer-separator">·</span>Ctrl / ⌘ + Shift + F to find</span
 		>
 	</footer>
 </main>
@@ -309,6 +405,41 @@
 	.reconnect {
 		border-color: var(--shell-border);
 	}
+	.close-current {
+		border-color: #49303a;
+		color: #f09b9b;
+	}
+	.close-current:hover:enabled {
+		background: #38242a;
+	}
+	.demo-notice {
+		display: flex;
+		align-items: center;
+		gap: 0.7rem;
+		padding: 0.55rem 1rem;
+		border-bottom: 1px solid #3a3527;
+		background: #1c1912;
+		color: #dbc89f;
+		font-size: 0.72rem;
+	}
+	.demo-notice > span:nth-child(2) {
+		flex: 1;
+	}
+	.demo-notice small {
+		display: block;
+		margin-top: 0.2rem;
+		font-size: 0.65rem;
+		color: #b7a988;
+	}
+	.demo-badge {
+		border: 1px solid #77623c;
+		border-radius: 0.3rem;
+		padding: 0.15rem 0.4rem;
+		color: #f1d299;
+		font-size: 0.6rem;
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+	}
 	.toolbar {
 		display: flex;
 		flex: none;
@@ -393,7 +524,20 @@
 			flex-wrap: wrap;
 		}
 		.identity {
-			flex-basis: calc(100% - 7rem);
+			flex-basis: 0;
+		}
+		.close-current span {
+			display: none;
+		}
+		.demo-notice {
+			flex-wrap: wrap;
+			padding: 0.6rem;
+		}
+		.demo-notice > span:nth-child(2) {
+			flex-basis: calc(100% - 4rem);
+		}
+		.demo-notice button {
+			margin-left: 3.6rem;
 		}
 		.toolbar {
 			flex-wrap: wrap;

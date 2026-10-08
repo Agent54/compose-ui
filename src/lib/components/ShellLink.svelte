@@ -16,6 +16,12 @@
 		compact?: boolean;
 		disabled?: boolean;
 	} = $props();
+
+	function openShell(event: MouseEvent) {
+		if (!event.metaKey || !config || disabled) return;
+		event.preventDefault();
+		window.open(shellHref(base, config, target, true), '_blank', 'noopener,noreferrer');
+	}
 </script>
 
 <a
@@ -24,8 +30,9 @@
 	href={config && !disabled ? shellHref(base, config, target) : undefined}
 	target="_blank"
 	rel="external noopener noreferrer"
+	onclick={openShell}
 	aria-label={`${label} in a new tab`}
-	title={`${label} in a new tab`}
+	title={`${label} in a new tab · ⌘-click for a new session`}
 	aria-disabled={disabled || !config}
 	data-tooltip={`${label} in a new tab`}
 >

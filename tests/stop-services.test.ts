@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { stopProjectWatch, stopServices } from '../src/lib/central/api.ts';
+import { removeServices, stopProjectWatch, stopServices } from '../src/lib/central/api.ts';
 import type { UiState } from '../src/lib/central/types.ts';
 
 const ui: UiState = {
@@ -17,6 +17,36 @@ const ui: UiState = {
 	statusDetail: ''
 };
 const project = { id: 'demo', path: '/work/compose.yaml' };
+
+test('removing an orphaned service stops watch and retains its recorded path and identity', async () => {
+	const originalFetch = globalThis.fetch;
+	const requests: Array<{ url: string; method?: string; body?: unknown }> = [];
+	globalThis.fetch = (input, init) => {
+		requests.push({
+			url: String(input),
+			method: init?.method,
+			...(init?.body ? { body: JSON.parse(String(init.body)) } : {})
+		});
+		return Promise.resolve(
+			init?.method === 'DELETE'
+				? Response.json({ message: 'Watch not found' }, { status: 404 })
+				: Response.json({ ok: true })
+		);
+	};
+	try {
+		await removeServices(ui, project, ['deleted-web']);
+		assert.deepEqual(requests, [
+			{ url: 'http://127.0.0.1:8094/v1.24/watch/demo', method: 'DELETE' },
+			{
+				url: 'http://127.0.0.1:8094/v1.24/rm/demo',
+				method: 'POST',
+				body: { path: '/work/compose.yaml', force: true, stop: true, services: ['deleted-web'] }
+			}
+		]);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
+});
 
 test('stopping a restarting service releases watch before requesting its stop', async () => {
 	const originalFetch = globalThis.fetch;

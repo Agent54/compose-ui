@@ -46,10 +46,24 @@ docker compose watch
 
 ## Interactive shells
 
-Container Shell actions and the header's VM Shell action open a standalone terminal in a new
+Container Shell actions and the header's VM Shell action open `/shell/index.html` in a new
 browser tab. The terminal uses xterm.js with resize, search, Unicode, accessibility controls,
 and optional WebGL rendering. Stopped containers request a start before opening Bash, with
-`sh` as a fallback for images without Bash. The server determines the current container state.
+`sh` as a fallback for images without Bash. Normal clicks attach to the last persistent dtach
+session; Cmd-click or New session creates another. The header dropdown shows each session's
+name/number, command and cwd. Closing a tab only detaches; Close session explicitly deletes it.
+The server determines the current container state.
+
+When the live shell backend is unavailable, the UI uses a clearly marked browser-local demo
+backend with saved simulated sessions. Demo commands never run on the container or VM.
+
+Below xterm, a native command textarea supports browser selection, caret movement, undo,
+paste, shell syntax highlighting, and multiline editing. Enter sends to the attached PTY;
+Shift+Enter adds a line. Use ↑/↓ or the History picker to recall commands without executing
+them. The editor keeps its own IndexedDB history across reloads, shared across sessions for
+the same target and separated between demo/live backends. There is no entry cap or automatic
+pruning; available browser storage still applies. This history is separate from Bash history
+and terminal scrollback. Tab completions and folder selection are planned in the handover.
 
 Real shell access requires the session/PTY backend described in
 [the shell agent handover](docs/shell-handover.md), which includes the engine comparison,

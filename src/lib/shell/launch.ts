@@ -11,7 +11,7 @@ export type ShellTarget =
 			path: string;
 			name: string;
 	  };
-export type ShellLaunch = ShellConfig & { target: ShellTarget };
+export type ShellLaunch = ShellConfig & { target: ShellTarget; newSession?: boolean };
 
 export function containerShellTarget(
 	project: ComposeProject,
@@ -34,14 +34,21 @@ export function shellActionLabel(state: ComposeService['state']) {
 	return 'Start and open shell';
 }
 
-export function shellHref(base: string, config: ShellConfig, target: ShellTarget) {
+export function shellHref(
+	base: string,
+	config: ShellConfig,
+	target: ShellTarget,
+	newSession = false
+) {
 	// Launch metadata belongs in the fragment, never credentials or session tickets.
 	const launch: ShellLaunch = {
 		serverUrl: config.serverUrl,
 		apiVersion: config.apiVersion,
-		target
+		target,
+		...(newSession ? { newSession: true } : {})
 	};
-	return `${base}/shell/#${encodeURIComponent(JSON.stringify(launch))}`;
+	// The launcher serves explicit asset paths, without directory-index routing.
+	return `${base}/shell/index.html#${encodeURIComponent(JSON.stringify(launch))}`;
 }
 
 export function shellApiBase(config: ShellConfig, origin: string) {
@@ -90,6 +97,7 @@ export function parseShellLaunch(hash: string, origin: string): ShellLaunch {
 	return {
 		serverUrl: launch.serverUrl,
 		apiVersion: launch.apiVersion,
+		...(launch.newSession === true ? { newSession: true } : {}),
 		target:
 			target.kind === 'vm'
 				? { kind: 'vm' }

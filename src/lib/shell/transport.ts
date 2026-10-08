@@ -1,139 +1,98 @@
-import { shellApiBase, type ShellLaunch } from './launch';
+import {
+	SHELL_PROTOCOL,
+	ShellBackendUnavailable,
+	type ShellBackend,
+	type ShellSelection,
+	type ShellSession,
+	type ShellSocket
+} from './session';
 
 export type ShellStatus = {
 	phase: 'connecting' | 'connected' | 'closed' | 'error';
 	message: string;
 	shell?: 'bash' | 'sh';
+	session?: ShellSession;
 };
 export interface ShellSink {
 	cols: number;
 	rows: number;
 	write(data: Uint8Array, callback: () => void): void;
 }
-
-type ShellSocket = Pick<
-	WebSocket,
-	| 'binaryType'
-	| 'readyState'
-	| 'bufferedAmount'
-	| 'onopen'
-	| 'onmessage'
-	| 'onerror'
-	| 'onclose'
-	| 'send'
-	| 'close'
->;
-type Dependencies = {
-	fetch: typeof fetch;
-	socket: (url: string, protocols: string[]) => ShellSocket;
-};
-
 const encoder = new TextEncoder();
 const MAX_PENDING_BYTES = 1024 * 1024;
 
-/** One PTY per connection. Reconnect explicitly creates a fresh session; never replay input. */
+/** One attachment. Disposal only detaches; DELETE is reserved for explicit user actions. */
 export class ShellTransport {
-	private readonly apiBase: string;
 	private readonly controller = new AbortController();
-	private sessionId = '';
 	private socket?: ShellSocket;
+	private session?: ShellSession;
 	private disposed = false;
 	private ready = false;
 	private finished = false;
 	private pendingBytes = 0;
 	private timer?: ReturnType<typeof setTimeout>;
-
+	private resolve?: () => void;
+	private reject?: (error: Error) => void;
 	constructor(
-		private launch: ShellLaunch,
-		origin: string,
+		private backend: ShellBackend,
 		private terminal: ShellSink,
-		private onStatus: (status: ShellStatus) => void,
-		private dependencies: Dependencies = {
-			fetch: globalThis.fetch.bind(globalThis),
-			socket: (url, protocols) => new WebSocket(url, protocols)
-		}
-	) {
-		this.apiBase = shellApiBase(launch, origin);
-	}
-
-	async connect() {
-		this.onStatus({ phase: 'connecting', message: 'Starting shell…' });
-		this.timer = setTimeout(() => {
-			this.fail('Starting the shell timed out. Check the VM and try again.');
-		}, 30000);
+		private onStatus: (status: ShellStatus) => void
+	) {}
+	async connect(selection: ShellSelection = { mode: 'attach-last' }) {
+		this.onStatus({
+			phase: 'connecting',
+			message: selection.mode === 'create' ? 'Creating session…' : 'Attaching to session…'
+		});
 		try {
-			const response = await this.dependencies.fetch(this.apiBase, {
-				method: 'POST',
-				credentials: 'include',
-				headers: { 'content-type': 'application/json', accept: 'application/json' },
-				signal: this.controller.signal,
-				body: JSON.stringify({
-					target: this.launch.target,
-					shell: 'bash',
-					fallbackShell: 'sh',
-					startIfStopped: true,
-					resumeIfPaused: true,
-					term: 'xterm-256color',
-					cols: this.terminal.cols,
-					rows: this.terminal.rows
-				})
-			});
-			if (!response.ok) {
-				if ([404, 405, 501].includes(response.status)) {
-					throw new Error(
-						'This server does not support interactive shells yet. Update the shell backend, then reconnect.'
-					);
-				}
-				let detail = '';
-				try {
-					const body = await response.json();
-					if (typeof body.message === 'string') detail = body.message.slice(0, 500);
-				} catch {
-					/* HTTP status is enough when there is no JSON error body. */
-				}
-				throw new Error(detail || `Starting shell failed (HTTP ${response.status}).`);
-			}
-			const session = await response.json();
-			if (typeof session.id !== 'string' || !/^[\w-]{1,128}$/.test(session.id)) {
-				throw new Error('The shell server returned an invalid session ID.');
-			}
-			this.sessionId = session.id;
-			if (this.disposed || this.finished) {
-				this.releaseSession();
-				return;
-			}
-			if (typeof session.token !== 'string' || !/^[\w-]{16,512}$/.test(session.token)) {
-				throw new Error('The shell server returned an invalid connection ticket.');
-			}
-			const url = new URL(`${this.apiBase}/${this.sessionId}/stream`);
-			url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-			const socket = this.dependencies.socket(url.href, [
-				'compose-shell-v1',
-				`ticket.${session.token}`
-			]);
+			const attachment = await this.backend.attach(
+				selection,
+				this.terminal.cols,
+				this.terminal.rows,
+				this.controller.signal
+			);
+			if (this.disposed) return;
+			this.session = attachment.session;
+			const socket = this.backend.openSocket(attachment);
 			this.socket = socket;
 			socket.binaryType = 'arraybuffer';
+			const connected = new Promise<void>((resolve, reject) => {
+				this.resolve = resolve;
+				this.reject = reject;
+			});
+			this.timer = setTimeout(
+				() => this.fail(new ShellBackendUnavailable('The live shell stream did not respond.')),
+				4000
+			);
 			socket.onopen = () => this.resize(this.terminal.cols, this.terminal.rows);
 			socket.onmessage = (event) => this.receive(event.data);
 			socket.onerror = () =>
-				this.fail('The shell connection failed. Check the VM connection and reconnect.');
+				this.fail(
+					this.ready
+						? new Error('The shell connection failed. Reconnect to this session.')
+						: new ShellBackendUnavailable('The live shell stream could not be reached.')
+				);
 			socket.onclose = () => {
-				if (this.finished || this.disposed) return;
-				this.fail('The shell disconnected. Reconnect to open a new shell.');
+				if (!this.finished && !this.disposed)
+					this.fail(
+						this.ready
+							? new Error('Detached. Your session is still available; reconnect to continue.')
+							: new ShellBackendUnavailable('The live shell stream disconnected before attaching.')
+					);
 			};
+			await connected;
 		} catch (error) {
-			if (!this.disposed && !this.finished) {
-				this.fail(error instanceof Error ? error.message : 'Could not start the shell.');
+			if (!this.disposed) {
+				this.fail(error instanceof Error ? error : new Error('Could not attach to the shell.'));
+				throw error;
 			}
 		}
 	}
-
 	private receive(data: unknown) {
 		if (this.finished || this.disposed) return;
 		if (data instanceof ArrayBuffer) {
 			const bytes = new Uint8Array(data);
 			if (bytes.length > 65536 || this.pendingBytes + bytes.length > MAX_PENDING_BYTES) {
-				this.fail('The shell sent too much output. Reconnect to open a new shell.');
+				this.fail(new Error('The shell sent too much output. Reconnect to this session.'));
 				return;
 			}
 			this.pendingBytes += bytes.length;
@@ -152,84 +111,78 @@ export class ShellTransport {
 				this.onStatus({
 					phase: 'connected',
 					message: message.shell === 'sh' ? 'Connected · Bash unavailable; using sh' : 'Connected',
-					shell: message.shell
+					shell: message.shell,
+					session: this.session
 				});
-			} else if (message.type === 'exit' && Number.isInteger(message.code)) {
-				this.finish({ phase: 'closed', message: `Shell exited with code ${message.code}.` });
-			} else if (message.type === 'error' && typeof message.message === 'string') {
-				this.fail(message.message.slice(0, 500));
-			} else {
-				throw new Error('Unknown control frame');
-			}
+				this.resolve?.();
+				this.resolve = undefined;
+				this.reject = undefined;
+			} else if (message.type === 'exit' && Number.isInteger(message.code))
+				this.finish({
+					phase: 'closed',
+					message: `Shell exited with code ${message.code}. Select New session to start another.`,
+					session: this.session
+				});
+			else if (message.type === 'error' && typeof message.message === 'string')
+				this.fail(new Error(message.message.slice(0, 500)));
+			else throw new Error('Unknown control frame');
 		} catch {
 			this.fail(
-				'The shell server sent an unsupported message. Check that the server supports compose-shell-v1.'
+				new Error(
+					`The shell server sent an unsupported message. It must support ${SHELL_PROTOCOL}.`
+				)
 			);
 		}
 	}
-
-	input(data: string, binary = false) {
-		if (!this.ready || this.finished || this.disposed || this.socket?.readyState !== 1) return;
+	input(data: string, binary = false): boolean {
+		if (!this.ready || this.finished || this.disposed || this.socket?.readyState !== 1)
+			return false;
 		const bytes = binary
 			? Uint8Array.from(data, (char) => char.charCodeAt(0))
 			: encoder.encode(data);
 		if (this.socket.bufferedAmount + bytes.length > MAX_PENDING_BYTES) {
 			this.fail(
-				'The shell connection cannot keep up with input. Reconnect and try a smaller paste.'
+				new Error(
+					'The shell connection cannot keep up with input. Reconnect and try a smaller paste.'
+				)
 			);
-			return;
+			return false;
 		}
-		for (let offset = 0; offset < bytes.length; offset += 16384) {
+		for (let offset = 0; offset < bytes.length; offset += 16384)
 			this.socket.send(bytes.subarray(offset, offset + 16384));
-		}
+		return true;
 	}
-
 	resize(cols: number, rows: number) {
 		this.sendControl({ type: 'resize', cols, rows });
 	}
-
 	private sendControl(message: object) {
-		if (!this.finished && !this.disposed && this.socket?.readyState === 1) {
+		if (!this.finished && !this.disposed && this.socket?.readyState === 1)
 			this.socket.send(JSON.stringify(message));
-		}
 	}
-
-	private fail(message: string) {
-		this.finish({ phase: 'error', message });
+	private fail(error: Error) {
+		this.finish({ phase: 'error', message: error.message, session: this.session }, error);
 	}
-
-	private finish(status: ShellStatus) {
+	private finish(status: ShellStatus, error = new Error(status.message)) {
 		if (this.finished || this.disposed) return;
 		this.finished = true;
 		this.ready = false;
 		clearTimeout(this.timer);
 		this.controller.abort();
 		this.socket?.close();
-		this.releaseSession();
+		this.reject?.(error);
+		this.resolve = undefined;
+		this.reject = undefined;
 		this.onStatus(status);
 	}
-
-	private releaseSession() {
-		if (!this.sessionId) return;
-		const id = this.sessionId;
-		this.sessionId = '';
-		void this.dependencies
-			.fetch(`${this.apiBase}/${id}`, {
-				method: 'DELETE',
-				credentials: 'include',
-				keepalive: true
-			})
-			.catch(() => {
-				/* The backend also expires disconnected and unused PTYs. */
-			});
-	}
-
 	dispose() {
+		if (this.disposed) return;
 		this.disposed = true;
 		this.ready = false;
 		clearTimeout(this.timer);
 		this.controller.abort();
 		this.socket?.close();
-		this.releaseSession();
+		this.resolve?.();
+		this.resolve = undefined;
+		this.reject = undefined;
 	}
 }

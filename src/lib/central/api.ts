@@ -856,6 +856,7 @@ export async function removeServices(
 	project: Pick<ComposeProject, 'id' | 'path'>,
 	services?: string[]
 ) {
+	await stopProjectWatch(ui, project);
 	await postProjectAction(ui, project.path, 'rm', project.id, {
 		force: true,
 		stop: true,
