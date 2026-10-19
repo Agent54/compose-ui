@@ -17,6 +17,10 @@
 		| 'pulse'
 		| 'route'
 		| 'terminal'
+		| 'close'
+		| 'info'
+		| 'history'
+		| 'pin'
 		| 'link';
 
 	let {
@@ -113,6 +117,14 @@
 	{:else if name === 'terminal'}
 		<rect x="3" y="4" width="18" height="16" rx="2" />
 		<path d="m7 9 3 3-3 3M13 15h4" />
+	{:else if name === 'close'}
+		<path d="m6 6 12 12M6 18 18 6" />
+	{:else if name === 'info'}
+		<circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7h.01" />
+	{:else if name === 'history'}
+		<path d="M3 11a9 9 0 1 1 2.5 7M3 4v7h7M12 7v5l3 2" />
+	{:else if name === 'pin'}
+		<path d="m16 3 5 5-4 1-4 4v4l-2 2-6-6 2-2h4l4-4zM8 16l-6 6" />
 	{:else if name === 'link'}
 		<path d="M10 13a5 5 0 0 0 7.54.54l2.02-2.02a5 5 0 0 0-7.07-7.07l-1.3 1.3" />
 		<path d="M14 11a5 5 0 0 0-7.54-.54l-2.02 2.02a5 5 0 0 0 7.07 7.07l1.3-1.3" />

@@ -238,6 +238,8 @@ test('readiness gates input, bytes preserve Unicode and mouse reports, ACK follo
 	assert.match(f.statuses.at(-1)!.message, /Bash unavailable/);
 	assert.equal(f.transport.input('你好\r'), true);
 	assert.deepEqual(f.socket.sent.at(-1), encoder.encode('你好\r'));
+	f.transport.input('\x1b[A\x1b[B\x1bOD\x1b[3~');
+	assert.deepEqual(f.socket.sent.at(-1), encoder.encode('\x1b[A\x1b[B\x1bOD\x1b[3~'));
 	f.transport.input('\xff\x80', true);
 	assert.deepEqual(f.socket.sent.at(-1), new Uint8Array([255, 128]));
 	const bytes = encoder.encode('\x1b[32mhi 🙂\x1b[0m');

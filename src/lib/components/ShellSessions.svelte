@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from './Icon.svelte';
+	import ShellAction from './ShellAction.svelte';
 	import type { ShellSession } from '$lib/shell/session';
 	let {
 		sessions,
@@ -51,18 +52,27 @@
 >
 	<summary aria-label="Shell sessions">
 		<span class="session-current">
-			<strong>{active ? `#${active.number} ${active.name}` : 'Select a session'}</strong>
-			<span class="metadata"
+			<strong
 				>{active
-					? `${active.command || 'Exited'} · ${active.cwd}`
-					: `${sessions.length} available`}</span
+					? active.name === `Session ${active.number}`
+						? active.name
+						: `#${active.number} ${active.name}`
+					: 'Select a session'}</strong
+			>
+			<span class="metadata"
+				>{active ? active.command || 'Exited' : `${sessions.length} available`}</span
 			>
 		</span>
 		<Icon name="chevron" size={13} rotated />
 	</summary>
 	<div class="dropdown">
 		<div class="dropdown-heading">
-			<span>Persistent sessions</span><span>{sessions.length}</span>
+			<span>Sessions <span class="session-count">{sessions.length}</span></span>
+			<ShellAction
+				label="About sessions"
+				description="Closing a tab only detaches. Close session terminates the shell and deletes its socket."
+				placement="bottom"
+			/>
 		</div>
 		<ul aria-label="Available shell sessions">
 			{#each sessions as session (session.id)}
@@ -75,7 +85,11 @@
 						onclick={(event) => choose(event, () => onselect(session.id))}
 					>
 						<span class="session-heading"
-							><strong>#{session.number} {session.name}</strong>
+							><strong
+								>{session.name === `Session ${session.number}`
+									? session.name
+									: `#${session.number} ${session.name}`}</strong
+							>
 							<span class="session-state"
 								>{session.state === 'exited'
 									? 'Exited'
@@ -95,7 +109,7 @@
 						disabled={busy}
 						aria-label={`Close session ${session.name}`}
 						title={`Terminate and delete ${session.name}`}
-						onclick={() => onclose(session.id)}>×</button
+						onclick={() => onclose(session.id)}><Icon name="close" size={14} stroke={1.7} /></button
 					>
 				</li>
 			{:else}<li class="empty">No sessions yet</li>{/each}
@@ -106,7 +120,6 @@
 			disabled={busy}
 			onclick={(event) => choose(event, onnew)}><span>+</span>New session</button
 		>
-		<p>Closing this tab only detaches. Close session deletes it.</p>
 	</div>
 </details>
 
@@ -114,15 +127,16 @@
 	.sessions {
 		position: relative;
 		min-width: 0;
-		width: min(26rem, 35vw);
+		width: min(19rem, 32vw);
 	}
 	summary {
 		display: flex;
 		align-items: center;
-		gap: 1rem;
-		padding: 0.4rem 0.65rem;
-		border: 1px solid var(--shell-border);
-		border-radius: 0.4rem;
+		gap: 0.75rem;
+		min-height: 34px;
+		padding: 0.4rem 0.6rem;
+		border: 1px solid transparent;
+		border-radius: 6px;
 		cursor: pointer;
 		list-style: none;
 	}
@@ -131,28 +145,29 @@
 	}
 	summary:hover,
 	.sessions[open] summary {
-		border-color: #536576;
-		background: #131e29;
+		border-color: var(--shell-border);
+		background: var(--shell-hover);
 	}
 	.session-current {
-		display: grid;
+		display: flex;
+		align-items: center;
 		flex: 1;
 		min-width: 0;
-		gap: 0.2rem;
+		gap: 0.75rem;
 	}
 	strong {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 0.75rem;
-		font-weight: 600;
+		font-size: 12px;
+		font-weight: 500;
 	}
 	.metadata {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-family: 'SFMono-Regular', Consolas, monospace;
-		font-size: 0.65rem;
+		font-size: 11px;
 		color: var(--shell-muted);
 	}
 	.dropdown {
@@ -160,25 +175,31 @@
 		z-index: 5;
 		top: calc(100% + 0.5rem);
 		right: 0;
-		width: min(30rem, calc(100vw - 1.2rem));
-		padding: 0.35rem;
-		border: 1px solid #34485b;
-		border-radius: 0.6rem;
-		background: #0d151f;
-		box-shadow: 0 12px 40px #0008;
+		width: min(25rem, calc(100vw - 1.5rem));
+		padding: 6px;
+		border: 1px solid var(--shell-border);
+		border-radius: 9px;
+		background: var(--shell-raised);
+		box-shadow: 0 12px 32px #0006;
 	}
 	.dropdown-heading {
 		display: flex;
 		justify-content: space-between;
-		padding: 0.6rem;
+		align-items: center;
+		padding: 0 6px 6px;
 		color: var(--shell-muted);
-		font-size: 0.65rem;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
+		font-size: 11px;
+	}
+	.session-count {
+		margin-left: 6px;
+		color: var(--shell-text);
 	}
 	ul {
 		margin: 0;
-		padding: 0;
+		padding: 3px;
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
 		list-style: none;
 		max-height: min(22rem, 50dvh);
 		overflow-y: auto;
@@ -186,14 +207,16 @@
 	li {
 		display: flex;
 		align-items: center;
-		border-radius: 0.35rem;
+		border-radius: 6px;
+		flex: none;
 	}
 	li:hover,
 	li:focus-within {
-		background: #172635;
+		background: var(--shell-hover);
 	}
 	li.current {
-		background: #152332;
+		background: var(--shell-active);
+		box-shadow: inset 0 0 0 1px #d0f58224;
 	}
 	button {
 		color: var(--shell-text);
@@ -210,15 +233,15 @@
 	button:focus-visible,
 	summary:focus-visible {
 		outline: 2px solid var(--shell-accent);
-		outline-offset: 1px;
+		outline-offset: -2px;
 	}
 	.select-session {
 		display: grid;
-		gap: 0.25rem;
+		gap: 5px;
 		min-width: 0;
 		flex: 1;
 		text-align: left;
-		padding: 0.65rem;
+		padding: 10px;
 	}
 	.session-heading {
 		display: flex;
@@ -229,46 +252,48 @@
 	}
 	.session-state {
 		color: var(--shell-accent);
-		font-size: 0.6rem;
+		font-size: 10px;
 	}
 	.command {
-		color: #c2d4e5;
+		color: var(--shell-text);
 	}
 	.close-session {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 		flex: none;
 		width: 2rem;
 		height: 2rem;
 		margin: 0.4rem;
 		opacity: 0;
 		font-size: 1.1rem;
-		color: #f09b9b;
+		color: var(--shell-muted);
 	}
 	li:hover .close-session,
 	li:focus-within .close-session {
 		opacity: 1;
 	}
 	.close-session:hover:enabled {
-		background: #38242a;
+		background: #ff858d15;
+		color: var(--shell-danger);
 	}
 	.new-session {
 		display: flex;
 		align-items: center;
 		gap: 0.6rem;
 		width: 100%;
-		margin-top: 0.3rem;
-		padding: 0.65rem;
-		border-top-color: var(--shell-border);
+		margin-top: 8px;
+		padding: 9px 12px;
 		text-align: left;
 		color: var(--shell-accent);
-		font-size: 0.75rem;
+		font-size: 12px;
 	}
 	.new-session:hover:enabled {
-		background: #172635;
+		background: var(--shell-hover);
 	}
 	.new-session span {
 		font-size: 1.1rem;
 	}
-	p,
 	.empty {
 		margin: 0;
 		padding: 0.6rem;

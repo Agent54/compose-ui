@@ -1,5 +1,13 @@
 import type { ShellLaunch } from './launch';
 import {
+	DemoInputDecoder,
+	demoCursor,
+	demoLine,
+	editDemoLine,
+	redrawDemoLine,
+	type DemoLine
+} from './demo-input';
+import {
 	parseSession,
 	type ShellAttachment,
 	type ShellBackend,
@@ -8,7 +16,7 @@ import {
 	type ShellSocket
 } from './session';
 
-type DemoSession = ShellSession & { history: string; input: string };
+type DemoSession = ShellSession & DemoLine & { history: string };
 type Registry = { nextNumber: number; lastId?: string; sessions: DemoSession[] };
 export type DemoStorage = Pick<Storage, 'getItem' | 'setItem'>;
 const encoder = new TextEncoder();
@@ -50,11 +58,17 @@ export class DemoShellBackend implements ShellBackend {
 				return {
 					nextNumber: value.nextNumber,
 					lastId: value.lastId,
-					sessions: value.sessions.map((item: DemoSession) => ({
-						...parseSession({ ...item, engine: item.engine ?? 'dtach' }),
-						history: typeof item.history === 'string' ? historyTail(item.history) : '',
-						input: typeof item.input === 'string' ? item.input.slice(0, 4096) : ''
-					}))
+					sessions: value.sessions.map((item: DemoSession) => {
+						let history = typeof item.history === 'string' ? historyTail(item.history) : '';
+						// Older demo records included the unfinished input in the transcript.
+						if (!Array.isArray(item.commands) && item.input && history.endsWith(item.input))
+							history = history.slice(0, -item.input.length);
+						return {
+							...parseSession({ ...item, engine: item.engine ?? 'dtach' }),
+							...demoLine(item),
+							history
+						};
+					})
 				};
 			}
 		} catch {
@@ -93,7 +107,7 @@ export class DemoShellBackend implements ShellBackend {
 				cwd: '/home/demo',
 				shell: 'bash',
 				state: 'running',
-				input: '',
+				...demoLine(),
 				history:
 					'\x1b[1mDemo shell\x1b[0m\r\nNo commands run on your container or VM.\r\nTry help, pwd, cd /var/log, unicode, or sleep 600.\r\n\r\n'
 			};
@@ -140,7 +154,9 @@ export class DemoShellBackend implements ShellBackend {
 			return;
 		}
 		socket.control({ type: 'ready', shell: session.shell });
-		socket.output(session.history);
+		socket.output(
+			session.history + session.input + demoCursor(session, this.prompt(session), socket.cols)
+		);
 	}
 	input(socket: DemoSocket, text: string) {
 		const registry = this.read();
@@ -150,22 +166,44 @@ export class DemoShellBackend implements ShellBackend {
 			return;
 		}
 		let output = '';
-		for (const char of text) {
-			if (char === '\x03') {
+		for (const input of socket.keyboard.feed(text)) {
+			const key = 'key' in input ? input.key : undefined;
+			if (key === 'interrupt') {
+				const before = { input: session.input, cursor: session.cursor };
+				session.cursor = Array.from(session.input).length;
+				if (before.cursor !== session.cursor)
+					output += redrawDemoLine(before, session, this.prompt(session), socket.cols);
+				session.history = historyTail(
+					session.history + session.input + `^C\r\n${this.prompt(session)}`
+				);
 				session.input = '';
+				session.cursor = 0;
+				session.historyIndex = session.commands.length;
+				session.draft = '';
 				session.command = 'bash';
 				output += `^C\r\n${this.prompt(session)}`;
 			} else if (session.command.startsWith('sleep ')) continue;
-			else if (char === '\r' || char === '\n') {
+			else if (key === 'enter' || (key === 'eof' && !session.input)) {
+				if (key === 'eof') session.input = 'exit';
 				const command = session.input.trim();
+				const before = { input: session.input, cursor: session.cursor };
+				session.cursor = Array.from(session.input).length;
+				if (key !== 'eof' && before.cursor !== session.cursor)
+					output += redrawDemoLine(before, session, this.prompt(session), socket.cols);
+				session.history = historyTail(session.history + session.input + '\r\n');
+				if (command) session.commands.push(command);
 				session.input = '';
+				session.cursor = 0;
+				session.historyIndex = session.commands.length;
+				session.draft = '';
 				output += '\r\n';
 				if (command === 'exit') {
 					session.state = 'exited';
 					session.command = '';
 					break;
 				}
-				if (command === 'pwd') output += `${session.cwd}\r\n`;
+				let result = '';
+				if (command === 'pwd') result += `${session.cwd}\r\n`;
 				else if (command.startsWith('cd ')) {
 					const path = command.slice(3).trim();
 					const resolved: string[] = [];
@@ -175,30 +213,34 @@ export class DemoShellBackend implements ShellBackend {
 					}
 					session.cwd = `/${resolved.join('/')}`;
 				} else if (command === 'cd') session.cwd = '/home/demo';
-				else if (command === 'ls') output += 'demo.txt  projects/  logs/\r\n';
+				else if (command === 'ls') result += 'demo.txt  projects/  logs/\r\n';
 				else if (command === 'help')
-					output +=
+					result +=
 						'Demo commands: pwd, cd PATH, ls, echo TEXT, unicode, stty size, sleep N, clear, exit\r\nSessions persist in this browser. Close session explicitly deletes them.\r\n';
-				else if (command === 'unicode') output += '你好 · café · 🙂\r\n';
-				else if (command === 'stty size') output += `${socket.rows} ${socket.cols}\r\n`;
-				else if (command.startsWith('echo ')) output += `${command.slice(5)}\r\n`;
+				else if (command === 'unicode') result += '你好 · café · 🙂\r\n';
+				else if (command === 'stty size') result += `${socket.rows} ${socket.cols}\r\n`;
+				else if (command.startsWith('echo ')) result += `${command.slice(5)}\r\n`;
 				else if (/^sleep \d+$/.test(command)) session.command = command;
 				else if (command === 'clear') {
-					output = '\x1b[2J\x1b[H';
+					result = '\x1b[2J\x1b[H';
 					session.history = '';
-				} else if (command) output += `Demo only: ${command}\r\n`;
-				if (!session.command.startsWith('sleep ')) output += this.prompt(session);
-			} else if (char === '\x7f' || char === '\b') {
-				if (session.input) {
-					session.input = [...session.input].slice(0, -1).join('');
-					output += '\b \b';
-				}
-			} else if (char >= ' ' && session.input.length < 4096) {
-				session.input += char;
-				output += char;
+				} else if (command) result += `Demo only: ${command}\r\n`;
+				if (!session.command.startsWith('sleep ')) result += this.prompt(session);
+				output += result;
+				session.history = historyTail(session.history + result);
+			} else if (key === 'clear') {
+				output += `\x1b[2J\x1b[H${this.prompt(session)}${session.input}${demoCursor(session, this.prompt(session), socket.cols)}`;
+				session.history = this.prompt(session);
+			} else {
+				const before = { input: session.input, cursor: session.cursor };
+				editDemoLine(session, input);
+				if (before.input === session.input && before.cursor === session.cursor) continue;
+				output +=
+					'text' in input && before.cursor === Array.from(before.input).length
+						? session.input.slice(before.input.length)
+						: redrawDemoLine(before, session, this.prompt(session), socket.cols);
 			}
 		}
-		session.history = historyTail(session.history + output);
 		this.save(registry);
 		for (const attached of this.sockets) {
 			if (attached.sessionId !== session.id) continue;
@@ -222,6 +264,7 @@ class DemoSocket implements ShellSocket {
 	cols = 80;
 	rows = 24;
 	private decoder = new TextDecoder();
+	readonly keyboard = new DemoInputDecoder();
 	constructor(
 		private backend: DemoShellBackend,
 		readonly sessionId: string

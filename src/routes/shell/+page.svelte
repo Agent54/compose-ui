@@ -1,10 +1,13 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import '@xterm/xterm/css/xterm.css';
 	import Icon from '$lib/components/Icon.svelte';
+	import ShellAction from '$lib/components/ShellAction.svelte';
 	import ShellSessions from '$lib/components/ShellSessions.svelte';
 	import ShellCommandInput from '$lib/components/ShellCommandInput.svelte';
 	import { commandHistoryScope } from '$lib/shell/history';
 	import { parseShellLaunch, type ShellLaunch } from '$lib/shell/launch';
+	import { shellStyles } from '$lib/shell/theme';
 	import {
 		createShellTerminal,
 		type ShellTerminal,
@@ -18,8 +21,8 @@
 	let dimensions = $state('');
 	let query = $state('');
 	let commandDraft = $state('');
+	let searchOpen = $state(false);
 	let searchMessage = $state('');
-	let screenReader = $state(false);
 	let busy = $state(false);
 	let sessionState = $state<ShellSessionState>({
 		sessions: [],
@@ -30,17 +33,30 @@
 	});
 	let controller = $state.raw<ShellTerminal | null>(null);
 	let searchInput: HTMLInputElement;
-	const title = $derived(launch?.target.kind === 'container' ? launch.target.name : 'VM Shell');
+	let searchReturnFocus: HTMLElement | null = null;
+	const title = $derived(launch?.target.kind === 'container' ? launch.target.name : 'VM shell');
+	const context = $derived(
+		launch?.target.kind === 'container' ? `${launch.target.project} / ${launch.target.service}` : ''
+	);
 	const activeSession = $derived(
 		sessionState.sessions.find((session) => session.id === sessionState.activeId)
 	);
 	const historyScope = $derived(
 		launch && origin ? commandHistoryScope(launch, sessionState.backend, origin) : ''
 	);
-	const subtitle = $derived(
-		launch?.target.kind === 'container'
-			? `${launch.target.project} / ${launch.target.service}`
-			: 'Virtual machine'
+	const connectionLabel = $derived(
+		status.phase === 'connected'
+			? 'Connected'
+			: status.phase === 'connecting'
+				? 'Connecting'
+				: status.phase === 'closed'
+					? sessionState.activeId
+						? 'Session exited'
+						: 'No session'
+					: 'Disconnected'
+	);
+	const demoDescription = $derived(
+		`No commands run on the container or VM. ${sessionState.demoReason.includes('Browser storage is unavailable') ? 'Sessions last until this tab closes.' : 'Sessions are saved in this browser.'} ${sessionState.demoReason}`
 	);
 
 	function mountTerminal(element: HTMLDivElement) {
@@ -57,7 +73,9 @@
 				dimensions: (cols, rows) => {
 					if (!disposed) dimensions = `${cols} × ${rows}`;
 				},
-				find: () => searchInput?.focus(),
+				find: () => {
+					void openSearch();
+				},
 				sessions: (next) => {
 					if (!disposed) sessionState = next;
 				}
@@ -89,13 +107,36 @@
 		};
 	}
 
+	async function openSearch() {
+		if (!searchOpen)
+			searchReturnFocus =
+				document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		searchOpen = true;
+		await tick();
+		searchInput?.focus();
+		searchInput?.select();
+	}
+	function closeSearch() {
+		searchOpen = false;
+		query = '';
+		searchMessage = '';
+		controller?.search('');
+		if (searchReturnFocus?.isConnected) searchReturnFocus.focus();
+		else controller?.focus();
+	}
+	function keyboard(event: KeyboardEvent) {
+		if (event.defaultPrevented || event.isComposing) return;
+		if ((event.metaKey || event.ctrlKey) && !event.altKey && event.code === 'KeyF') {
+			event.preventDefault();
+			void openSearch();
+		} else if (event.key === 'Escape' && searchOpen) {
+			event.preventDefault();
+			closeSearch();
+		}
+	}
 	function find(previous = false) {
 		searchMessage =
 			query && controller ? (controller.search(query, previous) ? '' : 'No matches') : '';
-	}
-
-	function disconnectOnLeave() {
-		controller?.dispose();
 	}
 	async function act(action: () => Promise<void>) {
 		if (busy) return;
@@ -109,26 +150,21 @@
 </script>
 
 <svelte:head>
-	<title>{title} — Shell</title>
+	<title>{title}</title>
 	<meta name="robots" content="noindex, nofollow" />
 	<meta name="referrer" content="no-referrer" />
 </svelte:head>
 <svelte:window
-	onpagehide={disconnectOnLeave}
+	onkeydown={keyboard}
+	onpagehide={() => controller?.dispose()}
 	onpageshow={(event) => {
 		if (event.persisted) window.location.reload();
 	}}
 />
 
-<main class="shell-window">
+<main class="shell-window" style={shellStyles}>
 	<header>
-		<div class="identity">
-			<span class="terminal-mark"><Icon name="terminal" size={20} /></span>
-			<div class="identity-copy">
-				<h1>{title}</h1>
-				<p>{subtitle}</p>
-			</div>
-		</div>
+		<div class="identity"><h1 title={context || undefined}>{title}</h1></div>
 		<ShellSessions
 			sessions={sessionState.sessions}
 			activeId={sessionState.activeId}
@@ -146,118 +182,64 @@
 				void act(() => controller!.closeSession(id));
 			}}
 		/>
-		<div class="connection" data-phase={status.phase} role="status">
-			<span class="connection-dot"></span>
-			{status.phase === 'connected'
-				? 'Connected'
-				: status.phase === 'connecting'
-					? 'Connecting'
-					: status.phase === 'closed'
-						? sessionState.activeId
-							? 'Exited'
-							: 'No session'
-						: 'Disconnected'}
-		</div>
-		{#if status.phase === 'error'}<button
-				type="button"
-				class="reconnect"
-				disabled={!controller || busy}
+		<div class="header-actions">
+			{#if sessionState.backend === 'demo'}
+				<ShellAction
+					label="Demo shell"
+					description={demoDescription}
+					placement="bottom"
+					align="center"
+					tone="info"
+					badge>Demo</ShellAction
+				>
+				<ShellAction
+					label="Retry live backend"
+					description="Try connecting to the container or VM."
+					placement="bottom"
+					disabled={!controller || busy || status.phase === 'connecting'}
+					onclick={() => {
+						void act(() => controller!.retryLive());
+					}}><Icon name="refresh" size={15} stroke={1.7} /></ShellAction
+				>
+			{/if}
+			{#if status.phase === 'error'}
+				<ShellAction
+					label="Reconnect"
+					description="Reattach to this session."
+					placement="bottom"
+					disabled={!controller || busy}
+					onclick={() => {
+						void act(() => controller!.reconnect());
+					}}><Icon name="refresh" size={15} stroke={1.7} /></ShellAction
+				>
+			{/if}
+			<ShellAction
+				label={connectionLabel}
+				description={status.message === connectionLabel ? '' : status.message}
+				placement="bottom"
+				tone={status.phase === 'connected'
+					? 'success'
+					: status.phase === 'error'
+						? 'danger'
+						: status.phase === 'connecting'
+							? 'warning'
+							: 'muted'}><span class="connection-dot" data-phase={status.phase}></span></ShellAction
+			>
+			<span class="sr-only" role="status">{connectionLabel}</span>
+			<ShellAction
+				label="Close session"
+				description="Terminate this session and delete its socket."
+				placement="bottom"
+				tone="danger"
+				disabled={!controller || !sessionState.activeId || busy || status.phase === 'connecting'}
 				onclick={() => {
-					void act(() => controller!.reconnect());
-				}}
-				title="Reattach to the same session"><Icon name="refresh" size={13} />Reconnect</button
-			>{/if}
-		<button
-			type="button"
-			class="close-current"
-			disabled={!controller || !sessionState.activeId || busy || status.phase === 'connecting'}
-			aria-label="Close current session"
-			title="Terminate and delete this session"
-			onclick={() => {
-				void act(() => controller!.closeSession(sessionState.activeId));
-			}}>× <span>Close session</span></button
-		>
+					void act(() => controller!.closeSession(sessionState.activeId));
+				}}><Icon name="close" size={16} stroke={1.7} /></ShellAction
+			>
+		</div>
 	</header>
-	{#if sessionState.backend === 'demo'}
-		<div class="demo-notice" role="status">
-			<span class="demo-badge">Demo</span><span
-				>No commands run on this container or VM.
-				{sessionState.demoReason.includes('Browser storage is unavailable')
-					? 'Sessions last until this tab closes.'
-					: 'Sessions are saved in this browser.'}
-				<small>{sessionState.demoReason}</small></span
-			>
-			<button
-				type="button"
-				disabled={!controller || busy || status.phase === 'connecting'}
-				onclick={() => {
-					void act(() => controller!.retryLive());
-				}}>Retry live backend</button
-			>
-		</div>
-	{/if}
 	{#if sessionState.error}<div class="notice error" role="alert">{sessionState.error}</div>{/if}
-
-	<div class="toolbar">
-		<form
-			class="find"
-			onsubmit={(event) => {
-				event.preventDefault();
-				find();
-			}}
-		>
-			<Icon name="search" size={13} />
-			<input
-				{@attach (node) => {
-					searchInput = node;
-				}}
-				aria-label="Find in terminal output"
-				placeholder="Find in output"
-				bind:value={query}
-				oninput={() => {
-					searchMessage = '';
-					if (!query) controller?.search('');
-				}}
-				onkeydown={(event) => {
-					if (event.key === 'Escape') controller?.focus();
-				}}
-			/>
-			<button
-				type="button"
-				aria-label="Previous match"
-				disabled={!query || !controller}
-				onclick={() => find(true)}>↑</button
-			>
-			<button type="submit" aria-label="Next match" disabled={!query || !controller}>↓</button>
-			<span class="search-result" role="status">{searchMessage}</span>
-		</form>
-		<div class="display-controls">
-			<button
-				type="button"
-				aria-label="Decrease terminal font size"
-				disabled={!controller}
-				onclick={() => controller?.zoom(-1)}>A−</button
-			>
-			<button
-				type="button"
-				aria-label="Increase terminal font size"
-				disabled={!controller}
-				onclick={() => controller?.zoom(1)}>A+</button
-			>
-			<button
-				type="button"
-				class:active={screenReader}
-				aria-pressed={screenReader}
-				disabled={!controller}
-				onclick={() => {
-					screenReader = !screenReader;
-					controller?.screenReader(screenReader);
-				}}>Screen reader</button
-			>
-		</div>
-	</div>
-
-	{#if status.phase !== 'connected' || status.shell === 'sh'}
+	{#if status.phase !== 'connected'}
 		<div
 			class="notice"
 			class:error={status.phase === 'error'}
@@ -265,13 +247,65 @@
 		>
 			{#if status.phase === 'connecting'}<Icon name="refresh" size={13} spinning />{/if}
 			<span>{status.message}</span>
-			{#if status.phase === 'error' && launch && !controller}
-				<button type="button" onclick={() => window.location.reload()}>Reload</button>
-			{/if}
+			{#if status.phase === 'error' && launch && !controller}<button
+					type="button"
+					onclick={() => window.location.reload()}>Reload</button
+				>{/if}
 		</div>
 	{/if}
-
-	<div class="terminal" aria-label={`${title} terminal`} {@attach mountTerminal}></div>
+	<div class="terminal-stage">
+		<div class="terminal" aria-label={`${title} terminal`} {@attach mountTerminal}></div>
+		{#if searchOpen}
+			<form
+				class="find-panel"
+				aria-label="Find in terminal"
+				onsubmit={(event) => {
+					event.preventDefault();
+					find();
+				}}
+			>
+				<Icon name="search" size={15} stroke={1.7} />
+				<input
+					{@attach (node) => {
+						searchInput = node;
+					}}
+					aria-label="Find in terminal output"
+					placeholder="Find in output"
+					bind:value={query}
+					oninput={(event) => {
+						query = event.currentTarget.value;
+						find();
+					}}
+					onkeydown={(event) => {
+						if (event.key === 'Enter' && event.shiftKey) {
+							event.preventDefault();
+							find(true);
+						}
+					}}
+				/>
+				<span class="search-result" role="status">{searchMessage}</span>
+				<button
+					type="button"
+					aria-label="Previous match"
+					title="Previous match (Shift+Enter)"
+					disabled={!query || !controller}
+					onclick={() => find(true)}>↑</button
+				>
+				<button
+					type="submit"
+					aria-label="Next match"
+					title="Next match (Enter)"
+					disabled={!query || !controller}>↓</button
+				>
+				<button
+					type="button"
+					aria-label="Close search"
+					title="Close search (Esc)"
+					onclick={closeSearch}><Icon name="close" size={14} /></button
+				>
+			</form>
+		{/if}
+	</div>
 	{#if historyScope}
 		{#key historyScope}
 			<ShellCommandInput
@@ -285,26 +319,25 @@
 		{/key}
 	{/if}
 	<footer>
-		<span>{status.shell ?? 'bash'}<span class="footer-separator">/</span>{dimensions || 'PTY'}</span
+		<span class="terminal-metadata"
+			>{status.shell ?? 'bash'}<span class="separator">·</span>{dimensions || 'PTY'}</span
 		>
-		<span class="keyboard-help"
-			>Tab close detaches<span class="footer-separator">·</span>Ctrl / ⌘ + Shift + F to find</span
-		>
+		<ShellAction
+			label="Shell shortcuts"
+			description="Closing this tab detaches; the session keeps running. Use Cmd / Ctrl + F to find in terminal output."
+			tone="muted"
+		/>
 	</footer>
 </main>
 
 <style>
 	.shell-window {
-		--shell-bg: #070b10;
-		--shell-chrome: #0d131b;
-		--shell-border: #23303d;
-		--shell-muted: #94a3b3;
-		--shell-text: #dfe5eb;
-		--shell-accent: #7fc4ea;
 		display: flex;
 		flex-direction: column;
 		height: 100dvh;
 		min-width: 320px;
+		color-scheme: dark;
+		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 		background: var(--shell-bg);
 		color: var(--shell-text);
 	}
@@ -313,246 +346,200 @@
 		flex: none;
 		align-items: center;
 		gap: 1rem;
-		padding: 0.85rem 1rem;
+		min-height: 56px;
+		padding: 0.5rem 1.25rem;
 		border-bottom: 1px solid var(--shell-border);
 		background: var(--shell-chrome);
 	}
 	.identity {
-		display: flex;
 		flex: 1;
 		min-width: 0;
-		align-items: center;
-		gap: 0.7rem;
 	}
-	.terminal-mark {
-		display: grid;
-		flex: none;
-		width: 2.15rem;
-		height: 2.15rem;
-		place-items: center;
-		color: var(--shell-accent);
-	}
-	.identity-copy {
-		min-width: 0;
-	}
-	h1,
-	p {
+	h1 {
 		margin: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		font-size: 13px;
+		font-weight: 550;
+		letter-spacing: -0.01em;
 	}
-	h1 {
-		font-size: 0.9rem;
-		font-weight: 600;
-	}
-	p {
-		margin-top: 0.1rem;
-		color: var(--shell-muted);
-		font-size: 0.7rem;
-	}
-	.connection {
-		display: inline-flex;
+	.header-actions {
+		display: flex;
 		flex: none;
 		align-items: center;
-		gap: 0.4rem;
-		color: var(--shell-muted);
-		font-size: 0.72rem;
+		gap: 2px;
 	}
 	.connection-dot {
-		width: 0.4rem;
-		height: 0.4rem;
+		display: block;
+		width: 7px;
+		height: 7px;
 		border-radius: 50%;
-		background: #e1bc79;
+		background: currentColor;
 	}
-	.connection[data-phase='connected'] .connection-dot {
-		background: #8acb91;
+	.connection-dot[data-phase='connecting'] {
+		background: transparent;
+		border: 1px solid currentColor;
 	}
-	.connection[data-phase='error'] .connection-dot {
-		background: #e07b7b;
+	.connection-dot[data-phase='error'] {
+		background: var(--shell-danger);
 	}
-	.connection[data-phase='closed'] .connection-dot {
-		background: var(--shell-muted);
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		margin: -1px;
+		padding: 0;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
 	}
 	button {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		gap: 0.4rem;
-		min-height: 1.9rem;
-		padding: 0.3rem 0.5rem;
-		border: 1px solid transparent;
-		border-radius: 0.35rem;
+		flex: none;
+		width: 28px;
+		height: 28px;
+		padding: 0;
+		border: 0;
+		border-radius: 5px;
 		background: transparent;
 		color: var(--shell-muted);
-		font-size: 0.72rem;
 		cursor: pointer;
-		white-space: nowrap;
+		font-size: 14px;
 	}
-	button:hover:enabled,
-	button.active {
-		background: #182633;
+	button:hover:enabled {
+		background: var(--shell-hover);
 		color: var(--shell-text);
 	}
-	button:focus-visible,
-	input:focus-visible {
-		border-color: var(--shell-accent);
+	button:focus-visible {
+		outline: 2px solid var(--shell-accent);
+		outline-offset: 2px;
+	}
+	/* Restore keyboard focus inside this page despite the app-wide focus reset. */
+	.shell-window :global(button:focus-visible),
+	.shell-window :global(summary:focus-visible) {
+		outline: 2px solid var(--shell-accent) !important;
+		outline-offset: 2px;
 	}
 	button:disabled {
+		opacity: 0.35;
 		cursor: default;
-		opacity: 0.4;
 	}
-	.reconnect {
-		border-color: var(--shell-border);
-	}
-	.close-current {
-		border-color: #49303a;
-		color: #f09b9b;
-	}
-	.close-current:hover:enabled {
-		background: #38242a;
-	}
-	.demo-notice {
-		display: flex;
-		align-items: center;
-		gap: 0.7rem;
-		padding: 0.55rem 1rem;
-		border-bottom: 1px solid #3a3527;
-		background: #1c1912;
-		color: #dbc89f;
-		font-size: 0.72rem;
-	}
-	.demo-notice > span:nth-child(2) {
+	.terminal-stage {
+		position: relative;
 		flex: 1;
+		min-height: 0;
 	}
-	.demo-notice small {
-		display: block;
-		margin-top: 0.2rem;
-		font-size: 0.65rem;
-		color: #b7a988;
+	.terminal {
+		width: 100%;
+		height: 100%;
+		padding: 1.25rem 1rem 0.5rem 1.25rem;
+		overflow: hidden;
 	}
-	.demo-badge {
-		border: 1px solid #77623c;
-		border-radius: 0.3rem;
-		padding: 0.15rem 0.4rem;
-		color: #f1d299;
-		font-size: 0.6rem;
-		text-transform: uppercase;
-		letter-spacing: 0.1em;
-	}
-	.toolbar {
+	.find-panel {
+		position: absolute;
+		z-index: 10;
+		top: 12px;
+		right: 20px;
 		display: flex;
-		flex: none;
 		align-items: center;
-		justify-content: space-between;
-		gap: 0.5rem;
-		padding: 0.35rem 0.75rem;
-		border-bottom: 1px solid var(--shell-border);
-	}
-	.find {
-		display: flex;
-		min-width: 0;
-		align-items: center;
-		gap: 0.25rem;
+		gap: 4px;
+		width: min(400px, calc(100% - 40px));
+		padding: 6px 8px;
+		border: 1px solid var(--shell-border);
+		border-radius: 8px;
+		background: var(--shell-raised);
+		box-shadow: 0 6px 24px #0006;
 		color: var(--shell-muted);
 	}
 	input {
-		width: 11rem;
+		flex: 1;
 		min-width: 0;
-		padding: 0.3rem 0.5rem;
-		border: 1px solid transparent;
-		border-radius: 0.3rem;
+		width: 0;
+		border: 0;
+		outline: 0;
 		background: transparent;
+		padding: 4px;
 		color: var(--shell-text);
-		font-size: 0.72rem;
+		font: inherit;
+		font-size: 12px;
 	}
 	input::placeholder {
 		color: var(--shell-muted);
 	}
-	.search-result {
-		color: #e1bc79;
-		font-size: 0.7rem;
+	.find-panel:focus-within {
+		border-color: var(--shell-accent);
 	}
-	.display-controls {
-		display: flex;
+	.search-result {
 		flex: none;
-		align-items: center;
-		gap: 0.25rem;
+		color: var(--shell-warning);
+		font-size: 11px;
 	}
 	.notice {
 		display: flex;
 		flex: none;
 		align-items: center;
-		gap: 0.5rem;
-		padding: 0.6rem 1rem;
+		gap: 0.65rem;
+		padding: 0.7rem 1.25rem;
 		border-bottom: 1px solid var(--shell-border);
-		background: #111b26;
-		color: #b6cadd;
-		font-size: 0.78rem;
+		background: var(--shell-chrome);
+		color: var(--shell-muted);
+		font-size: 12px;
+		line-height: 1.5;
 	}
 	.notice.error {
-		background: #23171b;
-		color: #f09b9b;
+		color: var(--shell-danger);
 	}
-	.terminal {
-		flex: 1;
-		min-height: 0;
-		padding: 0.8rem 0.6rem 0.3rem 1rem;
-		overflow: hidden;
+	.notice button {
+		width: auto;
+		padding: 0 0.5rem;
+		margin-left: auto;
+		font-size: 12px;
 	}
 	footer {
 		display: flex;
 		flex: none;
-		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
-		gap: 0.5rem;
-		padding: 0.5rem 1rem;
-		border-top: 1px solid var(--shell-border);
+		padding: 0 0.9rem 0.25rem 1.3rem;
+		min-height: 30px;
 		color: var(--shell-muted);
-		font-family: 'SFMono-Regular', Consolas, monospace;
-		font-size: 0.65rem;
 	}
-	.footer-separator {
+	.terminal-metadata {
+		font:
+			10px/1.5 'SFMono-Regular',
+			Consolas,
+			'Liberation Mono',
+			monospace;
+	}
+	.separator {
 		padding: 0 0.6rem;
-		color: #536576;
+		color: #686862;
 	}
 	@media (max-width: 640px) {
 		header {
 			gap: 0.5rem;
-			padding: 0.6rem;
 			flex-wrap: wrap;
+			padding: 0.5rem 0.75rem;
 		}
 		.identity {
 			flex-basis: 0;
 		}
-		.close-current span {
-			display: none;
+		.terminal {
+			padding: 1rem 0.5rem 0.25rem 0.75rem;
 		}
-		.demo-notice {
-			flex-wrap: wrap;
-			padding: 0.6rem;
-		}
-		.demo-notice > span:nth-child(2) {
-			flex-basis: calc(100% - 4rem);
-		}
-		.demo-notice button {
-			margin-left: 3.6rem;
-		}
-		.toolbar {
-			flex-wrap: wrap;
-		}
-		.find {
-			width: 100%;
+		.find-panel {
+			right: 12px;
+			width: calc(100% - 24px);
 		}
 		input {
-			flex: 1;
+			font-size: 16px;
 		}
-		.keyboard-help {
-			display: none;
-		}
-		.terminal {
-			padding-left: 0.5rem;
+		footer {
+			padding-left: 0.85rem;
+			padding-right: 0.5rem;
 		}
 	}
 	@media (prefers-reduced-motion: reduce) {

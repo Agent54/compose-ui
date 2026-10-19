@@ -2,6 +2,7 @@ import { ShellTransport, type ShellStatus } from './transport';
 import type { ShellLaunch } from './launch';
 import { DemoShellBackend } from './demo';
 import { commandInput } from './command';
+import { terminalTheme } from './theme';
 import {
 	LiveShellBackend,
 	ShellBackendUnavailable,
@@ -63,31 +64,16 @@ export async function createShellTerminal(
 		scrollback: 10000,
 		minimumContrastRatio: 4.5,
 		disableStdin: true,
-		theme: {
-			background: '#070b10',
-			foreground: '#dfe5eb',
-			cursor: '#7fc4ea',
-			selectionBackground: '#28445d',
-			black: '#18222e',
-			red: '#e07b7b',
-			green: '#8acb91',
-			yellow: '#e1bc79',
-			blue: '#7fb1e3',
-			magenta: '#b49ad8',
-			cyan: '#7fc4ca',
-			white: '#dfe5eb',
-			brightBlack: '#697786',
-			brightRed: '#f09b9b',
-			brightGreen: '#a2e3a9',
-			brightYellow: '#f1d299',
-			brightBlue: '#9bc9fa',
-			brightMagenta: '#d1b5f2',
-			brightCyan: '#a1e0e6',
-			brightWhite: '#ffffff'
-		}
+		theme: terminalTheme,
+		screenReaderMode: true
 	});
 	const fit = new FitAddon();
 	const search = new SearchAddon();
+	function resetDisplay() {
+		search.clearDecorations();
+		terminal.clearSelection();
+		terminal.reset();
+	}
 	terminal.loadAddon(fit);
 	terminal.loadAddon(search);
 	terminal.loadAddon(new Unicode11Addon());
@@ -205,7 +191,12 @@ export async function createShellTerminal(
 	});
 	terminal.onBinary((data) => transport?.input(data, true));
 	terminal.attachCustomKeyEventHandler((event) => {
-		if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.code === 'KeyF') {
+		if (
+			(event.ctrlKey || event.metaKey) &&
+			!event.altKey &&
+			!event.isComposing &&
+			event.code === 'KeyF'
+		) {
 			if (event.type === 'keydown') {
 				event.preventDefault();
 				callbacks.find();
@@ -226,7 +217,7 @@ export async function createShellTerminal(
 			// Probe without creating a real session before choosing a demo fallback.
 			if (allowDemo) sessions = await backend.list(lifetime.signal);
 			if (disposed || current !== generation) return;
-			terminal.reset();
+			resetDisplay();
 			const connection = new ShellTransport(backend, terminal, (status) => {
 				if (disposed || current !== generation) return;
 				terminal.options.disableStdin = status.phase !== 'connected';
@@ -235,7 +226,7 @@ export async function createShellTerminal(
 				publish();
 				if (
 					status.phase === 'connected' &&
-					!element.ownerDocument.activeElement?.closest('.command-editor')
+					!element.ownerDocument.activeElement?.closest('.command-editor, .find-panel')
 				)
 					terminal.focus();
 				if (status.phase === 'closed') void refreshSessions();
@@ -336,7 +327,7 @@ export async function createShellTerminal(
 					transport?.dispose();
 					activeId = '';
 					terminal.options.disableStdin = true;
-					terminal.reset();
+					resetDisplay();
 					callbacks.status({
 						phase: 'closed',
 						message: 'Session closed and deleted. Select another session or New session.'

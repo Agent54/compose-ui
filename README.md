@@ -47,8 +47,10 @@ docker compose watch
 ## Interactive shells
 
 Container Shell actions and the header's VM Shell action open `/shell/index.html` in a new
-browser tab. The terminal uses xterm.js with resize, search, Unicode, accessibility controls,
-and optional WebGL rendering. Stopped containers request a start before opening Bash, with
+browser tab. The terminal uses xterm.js with resize, Unicode, and screen reader support
+enabled by default. Cmd/Ctrl+F opens Find; Escape dismisses it and restores focus. Header
+actions and help use tooltips, with a neutral graphite palette shared by the command editor
+and session menus. Stopped containers request a start before opening Bash, with
 `sh` as a fallback for images without Bash. Normal clicks attach to the last persistent dtach
 session; Cmd-click or New session creates another. The header dropdown shows each session's
 name/number, command and cwd. Closing a tab only detaches; Close session explicitly deletes it.
@@ -56,11 +58,16 @@ The server determines the current container state.
 
 When the live shell backend is unavailable, the UI uses a clearly marked browser-local demo
 backend with saved simulated sessions. Demo commands never run on the container or VM.
+The demo console handles arrow-key command history and cursor editing, with history saved
+per session. This is separate from the command editor's History picker below the console.
 
 Below xterm, a native command textarea supports browser selection, caret movement, undo,
 paste, shell syntax highlighting, and multiline editing. Enter sends to the attached PTY;
 Shift+Enter adds a line. Use ↑/↓ or the History picker to recall commands without executing
-them. The editor keeps its own IndexedDB history across reloads, shared across sessions for
+them. Repeated arrow presses open the picker and highlight the current command. Pin commands
+to save them in localStorage and keep them above recent history. Pins are additional shortcuts;
+every original history entry stays in its chronological position, including duplicates. Pins survive reloads and
+sync between tabs for the same target. The editor keeps its own IndexedDB history across reloads, shared across sessions for
 the same target and separated between demo/live backends. There is no entry cap or automatic
 pruning; available browser storage still applies. This history is separate from Bash history
 and terminal scrollback. Tab completions and folder selection are planned in the handover.
