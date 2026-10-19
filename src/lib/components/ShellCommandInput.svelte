@@ -37,6 +37,7 @@
 	let pinStore: CommandPins | undefined;
 	let textarea: HTMLTextAreaElement;
 	let menu: HTMLDetailsElement;
+	let recent: HTMLUListElement;
 	let selectedEntry = $state.raw<CommandEntry | null>(null);
 	let selectedPin = $state<string | null>(null);
 	let historyPresses = 0;
@@ -60,6 +61,12 @@
 	);
 	const inputHelp =
 		'Enter to send. Shift + Enter for a new line. Use ↑ and ↓ to browse history; repeated presses open the menu. Pin commands to keep them at the top. History and pins are saved in this browser.';
+	const historyTime = new Intl.DateTimeFormat(undefined, {
+		month: 'short',
+		day: 'numeric',
+		hour: '2-digit',
+		minute: '2-digit'
+	});
 
 	function closeHistory() {
 		historyOpen = false;
@@ -143,9 +150,14 @@
 			);
 			for (const entry of page) merged[entry.id] = entry;
 			if (selectedEntry) merged[selectedEntry.id] = selectedEntry;
-			entries = Object.values(merged).sort((a, b) => b.id - a.id);
+			const scrollOffset = recent.scrollHeight - recent.scrollTop;
+			entries = Object.values(merged).sort((a, b) => a.id - b.id);
 			more = page.length === 40;
 			historyError = '';
+			if (older) {
+				await tick();
+				if (!disposed && historyOpen) recent.scrollTop = recent.scrollHeight - scrollOffset;
+			}
 		} catch {
 			if (!disposed) historyError = 'Command history could not be read from this browser.';
 		} finally {
@@ -189,7 +201,7 @@
 					selectedEntry = entry;
 					selectedPin = null;
 					if (!entries.some((item) => item.id === entry.id))
-						entries = [...entries, entry].sort((a, b) => b.id - a.id);
+						entries = [...entries, entry].sort((a, b) => a.id - b.id);
 					await replaceDraft(entry.text);
 				} else if (next === 'newer') {
 					selectedEntry = null;
@@ -295,6 +307,7 @@
 
 {#snippet commandRow(entry: CommandEntry | PinnedCommand)}
 	{@const pinned = pinnedTexts.has(entry.text)}
+	{@const usedAt = new Date(entry.createdAt)}
 	<li
 		class="command-row"
 		class:current={selectedKey === rowKey(entry)}
@@ -311,11 +324,10 @@
 			onclick={() => chooseCommand(entry)}
 		>
 			<code>{entry.text}</code>
-			<span
-				>{entry.cwd || 'Unknown directory'}<time datetime={new Date(entry.createdAt).toISOString()}
-					>{new Date(entry.createdAt).toLocaleString()}</time
-				></span
+			<time datetime={usedAt.toISOString()} title={`Used ${usedAt.toLocaleString()}`}
+				>{historyTime.format(usedAt)}</time
 			>
+			<span class="command-cwd" title={entry.cwd}>{entry.cwd || 'Unknown directory'}</span>
 		</button>
 		<button
 			type="button"
@@ -339,10 +351,15 @@
 			class="history"
 			bind:open={historyOpen}
 			{@attach mountHistory}
-			ontoggle={(event) => {
+			ontoggle={async (event) => {
 				if (event.currentTarget.open) {
 					readPins();
-					void loadHistory();
+					await loadHistory();
+					await tick();
+					if (disposed || !historyOpen) return;
+					recent.scrollTop = recent.scrollHeight;
+					if (historyPresses >= 2)
+						recent.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
 				} else closeHistory();
 			}}
 		>
@@ -358,15 +375,9 @@
 					<ul class="pins" aria-label="Pinned commands">
 						{#each pins as pin (pin.text)}{@render commandRow(pin)}{/each}
 					</ul>
+					<hr class="history-divider" />
 					{#if entries.length}<span class="section-heading">Recent</span>{/if}
 				{/if}
-				<ul class="recent" aria-label="Saved commands">
-					{#each entries as entry (entry.id)}
-						{@render commandRow(entry)}
-					{:else}<li class="empty">
-							{loading ? 'Loading history…' : 'Commands sent from this editor appear here.'}
-						</li>{/each}
-				</ul>
 				{#if more}<button
 						class="load-older"
 						type="button"
@@ -375,6 +386,19 @@
 							void loadHistory(true);
 						}}>{loading ? 'Loading…' : 'Load older commands'}</button
 					>{/if}
+				<ul
+					class="recent"
+					aria-label="Saved commands"
+					{@attach (node) => {
+						recent = node;
+					}}
+				>
+					{#each entries as entry (entry.id)}
+						{@render commandRow(entry)}
+					{:else}<li class="empty">
+							{loading ? 'Loading history…' : 'Commands sent from this editor appear here.'}
+						</li>{/each}
+				</ul>
 			</div>
 		</details>
 		<ShellAction label="Command editor shortcuts" description={inputHelp} />
@@ -626,6 +650,12 @@
 		font-weight: 500;
 		color: var(--shell-muted);
 	}
+	.history-divider {
+		flex: none;
+		margin: 8px 9px 2px;
+		border: 0;
+		border-top: 1px solid color-mix(in srgb, var(--shell-muted) 22%, transparent);
+	}
 	ul {
 		margin: 0;
 		padding: 3px;
@@ -660,7 +690,11 @@
 		box-shadow: inset 0 0 0 1px #d0f58224;
 	}
 	.load-command {
-		display: block;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: start;
+		column-gap: 12px;
+		row-gap: 5px;
 		flex: 1;
 		min-width: 0;
 		padding: 0.65rem 0.5rem;
@@ -699,21 +733,30 @@
 	}
 	code {
 		display: block;
+		grid-column: 1;
+		grid-row: 1;
 		font-size: 12px;
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 	}
-	.load-command > span {
-		display: flex;
-		justify-content: space-between;
-		gap: 0.5rem;
-		margin-top: 0.35rem;
+	.command-cwd {
+		grid-column: 1 / -1;
+		min-width: 0;
 		font-size: 11px;
 		color: var(--shell-muted);
-		overflow-wrap: anywhere;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	time {
-		flex: none;
+		grid-column: 2;
+		grid-row: 1;
+		padding-top: 1px;
+		color: var(--shell-muted);
+		font-size: 10px;
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+		white-space: nowrap;
 	}
 	.empty {
 		padding: 1.2rem 0.5rem;
@@ -722,7 +765,7 @@
 	.load-older {
 		flex: none;
 		width: 100%;
-		margin-top: 0.5rem;
+		margin-bottom: 0.5rem;
 		padding: 0.5rem;
 		border: 1px solid var(--shell-border);
 		border-radius: 0.3rem;
@@ -742,9 +785,6 @@
 		form {
 			padding-left: 0.65rem;
 			padding-right: 0.65rem;
-		}
-		.load-command > span {
-			flex-wrap: wrap;
 		}
 	}
 	@media (hover: none) {
