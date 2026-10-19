@@ -525,7 +525,7 @@
 	}
 	textarea::placeholder {
 		color: var(--shell-muted);
-		opacity: 1;
+		opacity: 0.45;
 	}
 	.highlight-viewport {
 		position: absolute;
