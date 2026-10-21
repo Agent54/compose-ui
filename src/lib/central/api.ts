@@ -87,6 +87,7 @@ type UpResponse = {
 type ListedBuild = {
 	id?: string;
 	project?: string;
+	services?: string[];
 	status?: string;
 	startedAt?: string;
 	finishedAt?: string | null;
@@ -661,12 +662,20 @@ function parseBuilds(payload: unknown) {
 function toBuild(raw: ListedBuild, index: number): ComposeBuild {
 	const id = String(raw.id ?? index + 1).trim();
 	const projectName = String(raw.project ?? '').trim() || `project-${index + 1}`;
+	const serviceNames = raw.services?.map((name) => name.trim()).filter(Boolean);
 
 	return {
 		id,
 		projectId: projectName,
 		projectName,
 		kind: 'build',
+		...(serviceNames?.length
+			? {
+					serviceNames,
+					serviceName: serviceNames.length === 1 ? serviceNames[0] : undefined,
+					targetName: serviceNames.join(', ')
+				}
+			: {}),
 		status:
 			raw.success === false
 				? 'failed'
@@ -743,6 +752,7 @@ export async function startProject(
 	build = true,
 	options?: {
 		forceRecreate?: boolean;
+		removeOrphans?: boolean;
 	}
 ) {
 	const response = await fetch(joinUrl(ui.serverUrl, ui.apiVersion, '/up'), {
@@ -754,7 +764,7 @@ export async function startProject(
 			path,
 			build,
 			watch: watching,
-			removeOrphans: true,
+			removeOrphans: options?.removeOrphans ?? true,
 			...(options?.forceRecreate ? { forceRecreate: true } : {}),
 			...(services?.length ? { services } : {})
 		})

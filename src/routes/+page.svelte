@@ -8,7 +8,13 @@
 	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
 	import ShellLink from '$lib/components/ShellLink.svelte';
 	import { containerShellTarget, shellActionLabel } from '$lib/shell/launch';
-	import { isReplacementBuild, latestBuildFailure, mergeBuilds } from '$lib/central/build-state';
+	import {
+		buildTitle,
+		isReplacementBuild,
+		latestBuildFailure,
+		mergeBuilds
+	} from '$lib/central/build-state';
+	import { composeActionPaths, composeStartupPaths } from '$lib/central/service-actions';
 	import { vmDiskMetrics, vmHostMetrics } from '$lib/central/vm-resource-metrics';
 	import DiskUsagePage from '$lib/components/DiskUsagePage.svelte';
 	import {
@@ -52,6 +58,7 @@
 		type UiState,
 		hydrateBuilds,
 		hydrateProjects,
+		hasFailedServicesOutsideTransition,
 		invalidateProjectServices,
 		isProjectRestarting,
 		isServiceRestarting,
@@ -66,6 +73,7 @@
 		selectProject,
 		settingsCollection,
 		servicesCollection,
+		servicePendingStatus,
 		setConnectionState,
 		setProjectExpanded,
 		setSidebarWidth,
@@ -586,11 +594,7 @@
 	}
 
 	function buildRowTitle(build: ComposeBuild) {
-		if (build.kind === 'watch') {
-			return `${build.targetName || build.projectName} watch`;
-		}
-
-		return build.projectName ? `${build.projectName} build #${build.id}` : `Build #${build.id}`;
+		return buildTitle(build);
 	}
 
 	function buildPanelOpen(buildId: string) {
@@ -711,13 +715,7 @@
 	}
 
 	function actionComposePaths(project: ComposeProject, service?: ComposeService) {
-		const paths = splitComposePath(service?.composePath || project.path);
-
-		if (service) {
-			return paths.slice(0, 1);
-		}
-
-		return paths;
+		return composeActionPaths(project, service);
 	}
 
 	function actionTarget(project: ComposeProject, path: string) {
@@ -917,53 +915,11 @@
 	}
 
 	function serviceStartButtonSpinning(project: ComposeProject, service: ComposeService) {
-		const target = activeBuildTarget(project.id);
-		return (
-			isServiceRestarting(service, busyAction) ||
-			Boolean(target && target.serviceId === service.id) ||
-			busyAction === `stop:${project.id}:${service.id}` ||
-			busyAction === `start:${project.id}:${service.id}` ||
-			busyAction === `up-no-build:${project.id}:${service.id}` ||
-			busyAction === `watching:${project.id}:${service.id}` ||
-			busyAction === `remove:${project.id}:${service.id}`
-		);
+		return Boolean(servicePendingStatusLabel(project, service));
 	}
 
 	function servicePendingStatusLabel(project: ComposeProject | undefined, service: ComposeService) {
-		if (!project) {
-			return '';
-		}
-
-		if (
-			busyAction === `stop:${project.id}:project` ||
-			busyAction === `stop:${project.id}:${service.id}`
-		) {
-			return 'stopping';
-		}
-
-		if (isServiceRestarting(service, busyAction)) {
-			return 'restarting';
-		}
-
-		if (busyAction === `remove:${project.id}:${service.id}`) {
-			return 'removing';
-		}
-
-		if (
-			busyAction === `start:${project.id}:${service.id}` ||
-			busyAction === `up-no-build:${project.id}:${service.id}` ||
-			busyAction === `watching:${project.id}:${service.id}`
-		) {
-			return 'starting';
-		}
-
-		const target = activeBuildTarget(project.id);
-
-		if (target?.serviceId === service.id) {
-			return 'building';
-		}
-
-		return '';
+		return project ? servicePendingStatus(service, builds, busyAction) : '';
 	}
 
 	function serviceDisplayStateLabel(project: ComposeProject | undefined, service: ComposeService) {
@@ -1479,6 +1435,9 @@
 			if (existing)
 				build = {
 					...build,
+					serviceNames: existing.serviceNames,
+					serviceName: existing.serviceName ?? build.serviceName,
+					targetName: existing.targetName ?? build.targetName,
 					startedAt: existing.startedAt,
 					serverStartedAt: existing.serverStartedAt,
 					status: existing.status,
@@ -2542,11 +2501,18 @@
 	}
 
 	function projectIconTone(project: ComposeProject) {
-		if (projectRestarting(project)) return 'project-icon-exited';
-		if (latestBuildFailure(builds, project) && !projectStartButtonSpinning(project))
-			return 'project-icon-exited';
-		const aggregateState = projectAggregateState(project);
 		const projectServices = sidebarServices.filter((service) => service.projectId === project.id);
+		if (projectStartButtonSpinning(project)) {
+			const transitioningServiceIds = projectServices
+				.filter((service) => serviceStartButtonSpinning(project, service))
+				.map((service) => service.id);
+
+			return hasFailedServicesOutsideTransition(projectServices, transitioningServiceIds)
+				? 'project-icon-exited'
+				: 'project-icon-neutral';
+		}
+		if (latestBuildFailure(builds, project)) return 'project-icon-exited';
+		const aggregateState = projectAggregateState(project);
 
 		if (aggregateState === 'running') {
 			return 'project-icon-running';
@@ -2858,7 +2824,9 @@
 					uiState,
 					actionPaths[0],
 					project.watching,
-					serviceNames
+					serviceNames,
+					true,
+					{ removeOrphans: composeActionPaths(project).length === 1 }
 				);
 				registerStartedBuild(project, startResult, service);
 				await syncAfterAction(project, `Started ${service.serviceName} in ${project.name} via /up.`, {
@@ -2880,8 +2848,15 @@
 				);
 				setConnectionState('connected', `Started ${service.serviceName}.`);
 			} else if (project.state === 'uncreated') {
-				for (const path of actionPaths) {
-					const startResult = await startProject(uiState, path, project.watching);
+				for (const path of composeStartupPaths(project)) {
+					const startResult = await startProject(
+						uiState,
+						path,
+						project.watching,
+						undefined,
+						true,
+						{ removeOrphans: actionPaths.length === 1 }
+					);
 					registerStartedBuild(project, startResult);
 				}
 				await syncAfterAction(project, `Started ${project.name} via /up.`, {
@@ -2889,8 +2864,15 @@
 				});
 				setConnectionState('connected', `Started ${project.name}.`);
 			} else {
-				for (const path of actionPaths) {
-					const startResult = await startProject(uiState, path, project.watching, undefined, true);
+				for (const path of composeStartupPaths(project)) {
+					const startResult = await startProject(
+						uiState,
+						path,
+						project.watching,
+						undefined,
+						true,
+						{ removeOrphans: actionPaths.length === 1 }
+					);
 					registerStartedBuild(project, startResult);
 				}
 				await syncAfterAction(project, `Started ${project.name} via /up --build.`, {
@@ -2924,8 +2906,10 @@
 				throw new Error(`No compose file path available for ${service?.serviceName ?? project.name}.`);
 			}
 
-			for (const path of actionPaths) {
-				await startProject(uiState, path, project.watching, serviceNames, false);
+			for (const path of composeStartupPaths(project, service)) {
+				await startProject(uiState, path, project.watching, serviceNames, false, {
+					removeOrphans: composeActionPaths(project).length === 1
+				});
 			}
 			await syncAfterAction(
 				project,
@@ -2968,13 +2952,14 @@
 				throw new Error(`No compose file path available for ${targetName}.`);
 			}
 
-			for (const path of actionPaths) {
+			for (const path of composeStartupPaths(project, service, keepWatching)) {
 				const startResult = await startProject(
 					uiState,
 					path,
 					keepWatching,
 					serviceNames,
-					true
+					true,
+					{ removeOrphans: composeActionPaths(project).length === 1 }
 				);
 				registerStartedBuild(project, startResult, service);
 			}
@@ -3104,10 +3089,15 @@
 			}
 
 			if (nextWatching) {
-				for (const path of actionPaths) {
-					const startResult = await startProject(uiState, path, nextWatching, serviceNames, true);
-					registerStartedBuild(project, startResult, service);
-				}
+				const startResult = await startProject(
+					uiState,
+					actionPaths.join(','),
+					nextWatching,
+					serviceNames,
+					true,
+					{ removeOrphans: composeActionPaths(project).length === 1 }
+				);
+				registerStartedBuild(project, startResult, service);
 				appendLog(project.id, 'ok', `Started ${service?.serviceName ?? project.name} with watch mode.`);
 			} else {
 				await stopProjectWatch(uiState, project);
@@ -3582,7 +3572,6 @@
 								shellConfig={uiState}
 								{selectedContainerId}
 								{busyAction}
-								buildingServiceId={activeBuildTarget(project.id)?.serviceId}
 								{builds}
 								sortBy={uiState?.sortBy ?? 'status'}
 								refreshEpoch={serviceQueryEpoch}

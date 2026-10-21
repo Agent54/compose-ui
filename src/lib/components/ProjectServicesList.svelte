@@ -11,6 +11,7 @@
 		composeServiceUrl,
 		isExpectedServiceStop,
 		isServiceRestarting,
+		servicePendingStatus,
 		servicesCollection,
 		type ComposeProject,
 		type ComposeService
@@ -21,7 +22,6 @@
 		shellConfig,
 		selectedContainerId,
 		busyAction,
-		buildingServiceId,
 		builds,
 		sortBy,
 		refreshEpoch,
@@ -36,7 +36,6 @@
 		shellConfig: ShellConfig | null | undefined;
 		selectedContainerId: string;
 		busyAction: string | null;
-		buildingServiceId?: string;
 		builds: ComposeBuild[];
 		sortBy: 'path' | 'name' | 'status';
 		refreshEpoch: number;
@@ -90,9 +89,8 @@
 	});
 
 	function serviceStateTone(service: ComposeService) {
-		if (isServiceRestarting(service, busyAction)) return 'service-state-exited';
-		if (latestBuildFailure(builds, project, service) && !startButtonSpinning(service))
-			return 'service-state-exited';
+		if (startButtonSpinning(service)) return 'service-state-pending';
+		if (latestBuildFailure(builds, project, service)) return 'service-state-exited';
 		if (service.state === 'running') {
 			return 'service-state-running';
 		}
@@ -153,47 +151,11 @@
 	}
 
 	function startButtonSpinning(service: ComposeService) {
-		return (
-			isServiceRestarting(service, busyAction) ||
-			buildingServiceId === service.id ||
-			busyAction === `stop:${project.id}:project` ||
-			busyAction === `stop:${project.id}:${service.id}` ||
-			busyAction === `start:${project.id}:${service.id}` ||
-			busyAction === `up-no-build:${project.id}:${service.id}` ||
-			busyAction === `watching:${project.id}:${service.id}` ||
-			busyAction === `remove:${project.id}:${service.id}`
-		);
+		return Boolean(servicePendingStatusLabel(service));
 	}
 
 	function servicePendingStatusLabel(service: ComposeService) {
-		if (
-			busyAction === `stop:${project.id}:project` ||
-			busyAction === `stop:${project.id}:${service.id}`
-		) {
-			return 'stopping';
-		}
-
-		if (isServiceRestarting(service, busyAction)) {
-			return 'restarting';
-		}
-
-		if (busyAction === `remove:${project.id}:${service.id}`) {
-			return 'removing';
-		}
-
-		if (
-			busyAction === `start:${project.id}:${service.id}` ||
-			busyAction === `up-no-build:${project.id}:${service.id}` ||
-			busyAction === `watching:${project.id}:${service.id}`
-		) {
-			return 'starting';
-		}
-
-		if (buildingServiceId === service.id) {
-			return 'building';
-		}
-
-		return '';
+		return servicePendingStatus(service, builds, busyAction);
 	}
 
 	function serviceDisplayStatusLabel(service: ComposeService) {
@@ -453,6 +415,10 @@
 
 	.service-state-exited {
 		color: #c66c6b;
+	}
+
+	.service-state-pending {
+		color: var(--app-text-muted);
 	}
 
 	.service-state-uncreated {

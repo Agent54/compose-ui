@@ -74,6 +74,7 @@ export type ComposeBuild = {
 	kind?: 'build' | 'watch';
 	targetName?: string;
 	serviceName?: string;
+	serviceNames?: string[];
 	status: 'running' | 'succeeded' | 'failed';
 	startedAt: string;
 	serverStartedAt?: string;

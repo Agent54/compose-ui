@@ -1,4 +1,37 @@
-import type { ComposeProject, ComposeService } from './types';
+import type { ComposeBuild, ComposeProject, ComposeService } from './types';
+
+export function servicePendingStatus(
+	service: Pick<ComposeService, 'id' | 'projectId' | 'projectName' | 'serviceName' | 'state'>,
+	builds: readonly ComposeBuild[],
+	busyAction: string | null = null
+) {
+	const matches = (kind: string) =>
+		busyAction === `${kind}:${service.projectId}:project` ||
+		busyAction === `${kind}:${service.projectId}:${service.id}`;
+
+	if (matches('stop')) return 'stopping';
+	if (isServiceRestarting(service, busyAction)) return 'restarting';
+	if (matches('remove')) return 'removing';
+	if (matches('start') || matches('up-no-build') || matches('watching')) return 'starting';
+
+	const building = builds.some((build) => {
+		if (
+			build.status !== 'running' ||
+			(build.projectId !== service.projectId && build.projectName !== service.projectName)
+		) {
+			return false;
+		}
+
+		const names = build.serviceNames?.length
+			? build.serviceNames
+			: build.serviceName
+				? [build.serviceName]
+				: [];
+		return !names.length || names.includes(service.serviceName);
+	});
+
+	return building ? 'building' : '';
+}
 
 export function isServiceRestarting(
 	service: Pick<ComposeService, 'id' | 'projectId' | 'state'>,
@@ -33,6 +66,18 @@ export function isExpectedServiceStop(service: Pick<ComposeService, 'state' | 's
 
 	const status = service.stateText.trim();
 	return /^exited\s*\(0\)(?:\s|$)/i.test(status) || /^stopped(?:\s|$)/i.test(status);
+}
+
+export function hasFailedServicesOutsideTransition(
+	services: ReadonlyArray<Pick<ComposeService, 'id' | 'state' | 'stateText'>>,
+	transitioningServiceIds: readonly string[]
+) {
+	return services.some(
+		(service) =>
+			!transitioningServiceIds.includes(service.id) &&
+			service.state === 'exited' &&
+			!isExpectedServiceStop(service)
+	);
 }
 
 export function areProjectServicesStoppedWithoutError(
