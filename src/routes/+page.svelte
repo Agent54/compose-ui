@@ -17,6 +17,8 @@
 	import { composeActionPaths, composeStartupPaths } from '$lib/central/service-actions';
 	import { vmDiskMetrics, vmHostMetrics } from '$lib/central/vm-resource-metrics';
 	import DiskUsagePage from '$lib/components/DiskUsagePage.svelte';
+	import RuntimeMemoryWarning from '$lib/components/RuntimeMemoryWarning.svelte';
+	import RuntimeCachePressureWarning from '$lib/components/RuntimeCachePressureWarning.svelte';
 	import {
 		buildCompletion,
 		parseOutputMessage,
@@ -3711,6 +3713,8 @@
 				</span>
 			</button>
 		</header>
+		<RuntimeMemoryWarning runtime={runtimeStatus} />
+		<RuntimeCachePressureWarning warning={runtimeStatus?.cachePressureWarning} />
 
 		{#if diskPageOpen}
 			<DiskUsagePage ui={uiState} runtime={runtimeStatus} onclose={closeDiskUsage} />

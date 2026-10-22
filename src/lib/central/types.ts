@@ -163,12 +163,28 @@ export type HostResources = {
 	diskTotalBytes?: number;
 };
 
+export type RuntimeIncident = {
+	id: string;
+	reason: string;
+	message: string;
+	occurredAt: string;
+	memoryLimitBytes?: number;
+};
+
+export type RuntimeCachePressureWarning = {
+	id: string;
+	message: string;
+	occurredAt: string;
+};
+
 export type RuntimeStatus = {
 	phase: string;
 	message: string;
 	memoryTotalBytes?: number;
 	memoryAvailableBytes?: number;
 	oomKillCount?: number;
+	lastIncident?: RuntimeIncident;
+	cachePressureWarning?: RuntimeCachePressureWarning;
 	hostResources?: HostResources;
 	vmResources?: VMResources;
 };

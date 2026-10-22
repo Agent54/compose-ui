@@ -1,5 +1,5 @@
 import { latestBuildFailure } from './build-state';
-import type { ComposeBuild } from './types';
+import type { ComposeBuild, RuntimeStatus } from './types';
 
 export type ResourcePressure = 'normal' | 'warning' | 'critical';
 
@@ -67,4 +67,41 @@ export function resourcePressure(percent: number | undefined): ResourcePressure 
 	}
 
 	return 'normal';
+}
+
+export type RuntimeMemoryWarning = {
+	id?: string;
+	title: string;
+	message: string;
+	occurredAt?: string;
+	memoryLimitBytes?: number;
+};
+
+export function runtimeMemoryWarning(
+	runtime: RuntimeStatus | null,
+	dismissedIncidentId = ''
+): RuntimeMemoryWarning | null {
+	const incident = runtime?.lastIncident;
+	if (incident?.reason === 'oom' && incident.id !== dismissedIncidentId) {
+		return { ...incident, title: 'VM ran out of memory' };
+	}
+	const total = runtime?.memoryTotalBytes;
+	const available = runtime?.memoryAvailableBytes;
+	if (
+		runtime?.phase === 'healthy' &&
+		total !== undefined &&
+		Number.isFinite(total) &&
+		total > 0 &&
+		available !== undefined &&
+		Number.isFinite(available) &&
+		available >= 0 &&
+		available <= total * 0.1
+	) {
+		return {
+			title: 'VM memory is almost full',
+			message: 'Pause builds or increase VM memory in Xe Launcher to avoid processes being killed.',
+			memoryLimitBytes: total
+		};
+	}
+	return null;
 }

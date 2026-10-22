@@ -1,4 +1,4 @@
-import type { UiState } from './types';
+import type { RuntimeCachePressureWarning, UiState } from './types';
 
 export type DiskItem = {
 	id?: string;
@@ -47,8 +47,10 @@ export type DiskCleanup = {
 	nextRunAt?: string;
 	imageMinimumAgeHours: number;
 	intervalHours: number;
-	buildCacheLimit: string;
+	buildCacheLimit?: string;
+	buildCacheMinimumAgeHours?: number;
 	buildCacheMinimumFreeDiskPercent?: number;
+	cachePressureWarning?: RuntimeCachePressureWarning;
 	results: { name: string; reclaimedBytes?: number; error?: string }[];
 };
 
