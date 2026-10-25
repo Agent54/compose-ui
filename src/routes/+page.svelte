@@ -16,6 +16,10 @@
 	} from '$lib/central/build-state';
 	import { composeActionPaths, composeStartupPaths } from '$lib/central/service-actions';
 	import { vmDiskMetrics, vmHostMetrics } from '$lib/central/vm-resource-metrics';
+	import {
+		fileDescriptorUrl, pollFileDescriptors, serviceDescriptorMetric, serviceWatcherMetric, vmDescriptorMetric,
+		type FileDescriptorSnapshot
+	} from '$lib/central/file-descriptors';
 	import DiskUsagePage from '$lib/components/DiskUsagePage.svelte';
 	import RuntimeMemoryWarning from '$lib/components/RuntimeMemoryWarning.svelte';
 	import RuntimeCachePressureWarning from '$lib/components/RuntimeCachePressureWarning.svelte';
@@ -163,6 +167,7 @@
 		tooltip: string;
 		percent?: number;
 		pressure?: ResourcePressure;
+		descriptor?: boolean;
 	};
 
 	type HashSelection = {
@@ -335,6 +340,7 @@
 	let systemInfo = $state<Record<string, unknown> | null>(null);
 	let systemResourcesRefreshing = false;
 	let runtimeStatus = $state<RuntimeStatus | null>(null);
+	let descriptorReading = $state<{ scope: string; snapshot: FileDescriptorSnapshot | null } | null>(null);
 	let diskPageOpen = $state(browser && window.location.hash === '#disk-usage');
 	function openDiskUsage() {
 		if (diskPageOpen) return;
@@ -1832,6 +1838,22 @@
 			: processSnapshots
 	);
 	const selectedResourceService = $derived(selectedContainer);
+	const descriptorContainerId = $derived(!diskPageOpen &&
+		(selectedResourceService?.state === 'running' || selectedResourceService?.state === 'paused')
+		? selectedResourceService.containerId : undefined);
+	const descriptorUrl = $derived(uiState
+		? fileDescriptorUrl(uiState.serverUrl, uiState.apiVersion, descriptorContainerId) : null);
+	const descriptorReady = $derived(runtimeStatus?.phase === 'healthy' && !uiState?.autoRefreshPaused);
+	const descriptorScope = $derived((descriptorUrl ?? '') + '|' + (runtimeStatus?.bootId ?? ''));
+	const descriptorSnapshot = $derived(descriptorReady && descriptorReading && descriptorReading.scope === descriptorScope
+		? descriptorReading.snapshot : null);
+	$effect(() => {
+		const url = descriptorUrl;
+		const scope = descriptorScope;
+		if (!browser || !descriptorReady || !url) return;
+		return pollFileDescriptors(url, (snapshot) => { descriptorReading = { scope, snapshot }; },
+			{ visible: () => !document.hidden });
+	});
 
 	function numberValue(...values: unknown[]) {
 		for (const value of values) {
@@ -2188,6 +2210,7 @@
 			},
 			...vmDiskMetrics(runtimeStatus?.vmResources, formatBytes),
 			...vmHostMetrics(runtimeStatus?.vmResources, formatBytes),
+			vmDescriptorMetric(descriptorSnapshot),
 			...((runtimeStatus?.oomKillCount ?? 0) > 0
 				? [
 						{
@@ -2245,8 +2268,13 @@
 			return [];
 		}
 
+		const watcherMetric = selectedResourceService
+			? serviceWatcherMetric(descriptorSnapshot, selectedResourceService.containerId) : null;
+		const descriptorMetrics = selectedResourceService
+			? [serviceDescriptorMetric(descriptorSnapshot, selectedResourceService.containerId),
+				...(watcherMetric ? [watcherMetric] : [])] : [];
 		if (!projectResources) {
-			return resourceMetrics(undefined, undefined, undefined, selectedProject.name);
+			return [...resourceMetrics(undefined, undefined, undefined, selectedProject.name), ...descriptorMetrics];
 		}
 
 		if (selectedResourceService) {
@@ -2261,7 +2289,7 @@
 			const limits = container?.limits ?? service?.limits;
 			const utilization = container?.utilization ?? service?.utilization;
 
-			return resourceMetrics(usage, limits, utilization, selectedResourceService.serviceName);
+			return [...resourceMetrics(usage, limits, utilization, selectedResourceService.serviceName), ...descriptorMetrics];
 		}
 
 		const summaryUsage = projectResources.projectSummary?.usage;
@@ -3667,6 +3695,7 @@
 						{:else}
 							<span
 								class="resource-chip"
+								data-descriptor={metric.descriptor}
 								data-pressure={metric.pressure ?? resourcePressure(metric.percent)}
 								data-tooltip={metric.tooltip}
 							>
@@ -3682,7 +3711,8 @@
 						{#each selectedResourceMetrics() as metric (`selected-${metric.label}`)}
 							<span
 								class="resource-chip"
-								data-pressure={resourcePressure(metric.percent)}
+								data-descriptor={metric.descriptor}
+								data-pressure={metric.pressure ?? resourcePressure(metric.percent)}
 								data-tooltip={metric.tooltip}
 							>
 								<span>{metric.label}</span>
@@ -5074,6 +5104,11 @@
 
 	.resource-chip[data-pressure='critical'] strong {
 		color: #f28a86;
+	}
+
+	.resource-chip[data-descriptor='true'][data-pressure='warning']::before {
+		background: #f59e0b;
+		box-shadow: 0 0 0 0.12rem rgba(245, 158, 11, 0.14);
 	}
 
 	.status-line {

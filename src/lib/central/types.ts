@@ -180,6 +180,7 @@ export type RuntimeCachePressureWarning = {
 export type RuntimeStatus = {
 	phase: string;
 	message: string;
+	bootId?: string;
 	memoryTotalBytes?: number;
 	memoryAvailableBytes?: number;
 	oomKillCount?: number;
