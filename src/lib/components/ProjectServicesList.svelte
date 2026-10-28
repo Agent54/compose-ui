@@ -13,6 +13,7 @@
 		isExpectedServiceStop,
 		isServiceRestarting,
 		servicePendingStatus,
+		serviceStateRank,
 		servicesCollection,
 		type ComposeProject,
 		type ComposeService
@@ -62,23 +63,14 @@
 		[() => project.id, () => refreshEpoch]
 	);
 
-	function stateRank(state: ComposeService['state']) {
-		if (state === 'running') return 0;
-		if (state === 'paused') return 1;
-		if (state === 'exited') return 2;
-		if (state === 'created') return 3;
-		if (state === 'unknown') return 4;
-		if (state === 'uncreated') return 5;
-		return 6;
-	}
-
 	const services = $derived.by(() => {
 		const entries = [...((servicesQuery.data ?? []) as ComposeService[])];
 
 		return entries.sort((left, right) => {
 			if (sortBy === 'status') {
 				return (
-					stateRank(left.state) - stateRank(right.state) ||
+					serviceStateRank(isServiceRestarting(left, busyAction) ? 'restarting' : left.state) -
+						serviceStateRank(isServiceRestarting(right, busyAction) ? 'restarting' : right.state) ||
 					left.serviceName.localeCompare(right.serviceName) ||
 					left.containerName.localeCompare(right.containerName)
 				);
@@ -213,10 +205,7 @@
 							<span class="service-title-text">{service.serviceName}</span>
 						</span>
 						{#if shouldShowServiceStatus(service)}
-							<span
-								class="service-status"
-								class:restarting-status={isServiceRestarting(service, busyAction)}
-							>
+							<span class="service-status">
 								{serviceDisplayStatusLabel(service)}
 								{#if service.health && !servicePendingStatusLabel(service)}
 									<span class="health-tag">({service.health})</span>
@@ -490,10 +479,6 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		color: var(--app-text-muted);
-	}
-
-	.restarting-status {
-		color: #c66c6b;
 	}
 
 	.health-tag {

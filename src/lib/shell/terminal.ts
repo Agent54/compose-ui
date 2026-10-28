@@ -57,8 +57,8 @@ export async function createShellTerminal(
 		// Required by the official Unicode 11 addon; dependency versions are pinned together.
 		allowProposedApi: true,
 		fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-		fontSize: 14,
-		lineHeight: 1.2,
+		fontSize: 13,
+		lineHeight: 1.35,
 		cursorBlink: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
 		cursorStyle: 'bar',
 		scrollback: 10000,
@@ -350,7 +350,7 @@ export async function createShellTerminal(
 		zoom: (delta) => {
 			terminal.options.fontSize = Math.max(
 				10,
-				Math.min(24, (terminal.options.fontSize ?? 14) + delta)
+				Math.min(24, (terminal.options.fontSize ?? 13) + delta)
 			);
 			fit.fit();
 		},

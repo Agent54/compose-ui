@@ -337,7 +337,7 @@
 		height: 100dvh;
 		min-width: 320px;
 		color-scheme: dark;
-		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+		font-family: inherit;
 		background: var(--shell-bg);
 		color: var(--shell-text);
 	}
@@ -345,9 +345,9 @@
 		display: flex;
 		flex: none;
 		align-items: center;
-		gap: 1rem;
-		min-height: 56px;
-		padding: 0.5rem 1.25rem;
+		gap: 0.75rem;
+		min-height: 46px;
+		padding: 0.375rem 1rem;
 		border-bottom: 1px solid var(--shell-border);
 		background: var(--shell-chrome);
 	}
@@ -360,8 +360,8 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-size: 13px;
-		font-weight: 550;
+		font-size: 12px;
+		font-weight: 500;
 		letter-spacing: -0.01em;
 	}
 	.header-actions {
@@ -372,8 +372,8 @@
 	}
 	.connection-dot {
 		display: block;
-		width: 7px;
-		height: 7px;
+		width: 6px;
+		height: 6px;
 		border-radius: 50%;
 		background: currentColor;
 	}
@@ -435,21 +435,21 @@
 	.terminal {
 		width: 100%;
 		height: 100%;
-		padding: 1.25rem 1rem 0.5rem 1.25rem;
+		padding: 1rem 1rem 0.5rem;
 		overflow: hidden;
 	}
 	.find-panel {
 		position: absolute;
 		z-index: 10;
 		top: 12px;
-		right: 20px;
+		right: 16px;
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		width: min(400px, calc(100% - 40px));
+		width: min(360px, calc(100% - 32px));
 		padding: 6px 8px;
 		border: 1px solid var(--shell-border);
-		border-radius: 8px;
+		border-radius: 6px;
 		background: var(--shell-raised);
 		box-shadow: 0 6px 24px #0006;
 		color: var(--shell-muted);
@@ -470,7 +470,7 @@
 		color: var(--shell-muted);
 	}
 	.find-panel:focus-within {
-		border-color: var(--shell-accent);
+		border-color: var(--shell-focus);
 	}
 	.search-result {
 		flex: none;
@@ -482,7 +482,7 @@
 		flex: none;
 		align-items: center;
 		gap: 0.65rem;
-		padding: 0.7rem 1.25rem;
+		padding: 0.5rem 1rem;
 		border-bottom: 1px solid var(--shell-border);
 		background: var(--shell-chrome);
 		color: var(--shell-muted);
@@ -503,9 +503,9 @@
 		flex: none;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0 0.9rem 0.25rem 1.3rem;
-		min-height: 30px;
-		color: var(--shell-muted);
+		padding: 0 0.75rem 0 1rem;
+		min-height: 28px;
+		color: var(--shell-subtle);
 	}
 	.terminal-metadata {
 		font:
@@ -516,19 +516,19 @@
 	}
 	.separator {
 		padding: 0 0.6rem;
-		color: #686862;
+		color: var(--shell-subtle);
 	}
 	@media (max-width: 640px) {
 		header {
 			gap: 0.5rem;
 			flex-wrap: wrap;
-			padding: 0.5rem 0.75rem;
+			padding: 0.375rem 0.75rem;
 		}
 		.identity {
 			flex-basis: 0;
 		}
 		.terminal {
-			padding: 1rem 0.5rem 0.25rem 0.75rem;
+			padding: 0.75rem 0.75rem 0.25rem;
 		}
 		.find-panel {
 			right: 12px;
@@ -538,7 +538,7 @@
 			font-size: 16px;
 		}
 		footer {
-			padding-left: 0.85rem;
+			padding-left: 0.75rem;
 			padding-right: 0.5rem;
 		}
 	}

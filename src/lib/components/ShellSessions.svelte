@@ -127,14 +127,14 @@
 	.sessions {
 		position: relative;
 		min-width: 0;
-		width: min(19rem, 32vw);
+		width: min(16rem, 36vw);
 	}
 	summary {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
-		min-height: 34px;
-		padding: 0.4rem 0.6rem;
+		gap: 0.5rem;
+		min-height: 30px;
+		padding: 0.25rem 0.5rem;
 		border: 1px solid transparent;
 		border-radius: 6px;
 		cursor: pointer;
@@ -153,7 +153,7 @@
 		align-items: center;
 		flex: 1;
 		min-width: 0;
-		gap: 0.75rem;
+		gap: 0.5rem;
 	}
 	strong {
 		overflow: hidden;
@@ -175,10 +175,10 @@
 		z-index: 5;
 		top: calc(100% + 0.5rem);
 		right: 0;
-		width: min(25rem, calc(100vw - 1.5rem));
+		width: min(22rem, calc(100vw - 1.5rem));
 		padding: 6px;
 		border: 1px solid var(--shell-border);
-		border-radius: 9px;
+		border-radius: 7px;
 		background: var(--shell-raised);
 		box-shadow: 0 12px 32px #0006;
 	}
@@ -199,7 +199,7 @@
 		padding: 3px;
 		display: flex;
 		flex-direction: column;
-		gap: 5px;
+		gap: 2px;
 		list-style: none;
 		max-height: min(22rem, 50dvh);
 		overflow-y: auto;
@@ -216,7 +216,7 @@
 	}
 	li.current {
 		background: var(--shell-active);
-		box-shadow: inset 0 0 0 1px #d0f58224;
+		box-shadow: inset 0 0 0 1px var(--shell-border);
 	}
 	button {
 		color: var(--shell-text);
@@ -237,7 +237,7 @@
 	}
 	.select-session {
 		display: grid;
-		gap: 5px;
+		gap: 4px;
 		min-width: 0;
 		flex: 1;
 		text-align: left;
@@ -251,7 +251,7 @@
 		min-width: 0;
 	}
 	.session-state {
-		color: var(--shell-accent);
+		color: var(--shell-muted);
 		font-size: 10px;
 	}
 	.command {
@@ -262,8 +262,8 @@
 		align-items: center;
 		justify-content: center;
 		flex: none;
-		width: 2rem;
-		height: 2rem;
+		width: 1.75rem;
+		height: 1.75rem;
 		margin: 0.4rem;
 		opacity: 0;
 		font-size: 1.1rem;
@@ -274,7 +274,7 @@
 		opacity: 1;
 	}
 	.close-session:hover:enabled {
-		background: #ff858d15;
+		background: color-mix(in srgb, var(--shell-danger) 12%, transparent);
 		color: var(--shell-danger);
 	}
 	.new-session {

@@ -1,45 +1,60 @@
-/** Shared chrome, command editor and ANSI colors for the standalone shell. */
+/** Shell chrome follows Compose; ANSI output keeps subdued semantic colors. */
 export const shellColors = {
-	bg: '#090909',
-	chrome: '#101010',
-	raised: '#171717',
-	hover: '#1e1e1e',
-	border: '#1c1c1c',
-	focus: '#50504a',
-	active: '#252522',
-	muted: '#a1a19b',
-	text: '#eeeee9',
-	accent: '#d0f582',
-	info: '#bca7ff',
-	success: '#8ee3b5',
-	warning: '#f1c77e',
-	danger: '#ff858d',
-	selection: '#3c4230'
+	bg: '#000000',
+	chrome: '#030303',
+	raised: '#070707',
+	hover: '#101010',
+	border: 'rgba(210, 220, 230, 0.085)',
+	focus: '#454c54',
+	active: '#151515',
+	muted: '#8e98a3',
+	subtle: '#626d78',
+	text: '#dfe5eb',
+	accent: '#b7c1ca',
+	info: '#a4aeb8',
+	success: '#819b8a',
+	warning: '#b8a17d',
+	danger: '#c48383',
+	selection: '#293038'
 } as const;
 
-export const shellStyles = Object.entries(shellColors)
+// Use the dashboard's live tokens for chrome; xterm needs literal canvas colors.
+const chromeColors = {
+	...shellColors,
+	bg: 'var(--app-bg)',
+	chrome: 'var(--app-surface)',
+	raised: 'var(--app-surface-raised)',
+	hover: 'var(--app-surface-hover)',
+	border: 'var(--app-border)',
+	active: 'var(--app-surface-active)',
+	muted: 'var(--app-text-muted)',
+	subtle: 'var(--app-text-subtle)',
+	text: 'var(--app-text)'
+};
+
+export const shellStyles = Object.entries(chromeColors)
 	.map(([name, value]) => `--shell-${name}:${value}`)
 	.join(';');
 
 export const terminalTheme = {
 	background: shellColors.bg,
-	foreground: shellColors.text,
+	foreground: '#c2c9d0',
 	cursor: shellColors.accent,
 	selectionBackground: shellColors.selection,
-	black: '#242424',
+	black: '#202428',
 	red: shellColors.danger,
 	green: shellColors.success,
 	yellow: shellColors.warning,
-	blue: '#a7b9f4',
-	magenta: shellColors.info,
-	cyan: '#94d7d6',
-	white: shellColors.text,
-	brightBlack: '#92928c',
-	brightRed: '#ffa3a9',
-	brightGreen: '#b4efcb',
-	brightYellow: '#f7dca6',
-	brightBlue: '#c4d0ff',
-	brightMagenta: '#d4c5ff',
-	brightCyan: '#b2ebea',
-	brightWhite: '#ffffff'
+	blue: '#8b9eb2',
+	magenta: '#a39ba8',
+	cyan: '#849fa3',
+	white: '#c2c9d0',
+	brightBlack: shellColors.subtle,
+	brightRed: '#d49696',
+	brightGreen: '#9caf9f',
+	brightYellow: '#c8b491',
+	brightBlue: '#a2b2c3',
+	brightMagenta: '#b6acba',
+	brightCyan: '#9bb3b6',
+	brightWhite: shellColors.text
 };

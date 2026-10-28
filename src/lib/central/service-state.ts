@@ -1,6 +1,26 @@
 import type { ComposeBuild, ComposeProject, ComposeService } from './types';
 import { actionTargetsOverlap, type ServiceAction } from './action-queue';
 
+export function projectStateRank(state: ComposeProject['state'] | ComposeService['state'] | 'mixed') {
+	if (state === 'running' || state === 'restarting') return 0;
+	if (state === 'paused') return 1;
+	if (state === 'mixed') return 2;
+	if (state === 'exited' || state === 'stopped') return 3;
+	if (state === 'created' || state === 'unknown') return 4;
+	if (state === 'uncreated') return 5;
+	return 6;
+}
+
+export function serviceStateRank(state: ComposeService['state']) {
+	if (state === 'running' || state === 'restarting') return 0;
+	if (state === 'paused') return 1;
+	if (state === 'exited') return 2;
+	if (state === 'created') return 3;
+	if (state === 'unknown') return 4;
+	if (state === 'uncreated') return 5;
+	return 6;
+}
+
 export function servicePendingStatus(
 	service: Pick<ComposeService, 'id' | 'projectId' | 'projectName' | 'serviceName' | 'state'>,
 	builds: readonly ComposeBuild[],

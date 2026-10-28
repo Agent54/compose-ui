@@ -68,11 +68,11 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 2rem;
-		height: 2rem;
+		width: 1.75rem;
+		height: 1.75rem;
 		padding: 0;
-		border: 0;
-		border-radius: 6px;
+		border: 1px solid transparent;
+		border-radius: 5px;
 		background: transparent;
 		color: var(--shell-muted);
 		cursor: pointer;
@@ -99,11 +99,13 @@
 		color: var(--shell-warning);
 	}
 	button[data-tone='accent'] {
-		background: var(--shell-accent);
-		color: #22261b;
+		border-color: var(--shell-border);
+		background: var(--shell-active);
+		color: var(--shell-text);
 	}
 	button[data-tone='accent']:hover:enabled {
-		background: #ddffa3;
+		border-color: var(--shell-focus);
+		background: var(--shell-hover);
 	}
 	button[data-tone='accent']:disabled {
 		background: transparent;
@@ -111,18 +113,18 @@
 		color: var(--shell-muted);
 	}
 	button[data-tone='danger']:hover:enabled {
-		background: #ff858d15;
+		background: color-mix(in srgb, var(--shell-danger) 12%, transparent);
 		color: var(--shell-danger);
 	}
 	button.badge {
 		width: auto;
-		height: 1.5rem;
-		padding: 0 0.5rem;
+		height: 1.25rem;
+		padding: 0 0.375rem;
 		font-family: inherit;
-		font-size: 11px;
+		font-size: 10px;
 		font-weight: 500;
-		border: 1px solid #bca7ff38;
-		background: #bca7ff0d;
+		border: 1px solid var(--shell-border);
+		background: var(--shell-raised);
 	}
 	.tooltip {
 		display: none;
@@ -161,7 +163,7 @@
 	.tooltip > span {
 		display: block;
 		margin-top: 0.3rem;
-		color: #bcbcb6;
+		color: var(--shell-muted);
 	}
 	.action:not(.dismissed):hover .tooltip,
 	.action:not(.dismissed):focus-within .tooltip {

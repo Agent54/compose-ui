@@ -29,11 +29,11 @@
 {#if visible}
 	<div class="cache-warning" role="alert">
 		<div>
-			<strong>Low disk space triggered younger cache cleanup</strong>
+			<strong>VM disk space is low</strong>
 			<time datetime={visible.occurredAt}>{new Date(visible.occurredAt).toLocaleString()}</time>
 			<p>{visible.message}</p>
 		</div>
-		<button type="button" aria-label="Dismiss cache cleanup warning" onclick={dismiss}
+		<button type="button" aria-label="Dismiss low disk space warning" onclick={dismiss}
 			>Dismiss</button
 		>
 	</div>

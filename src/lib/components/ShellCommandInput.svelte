@@ -465,9 +465,9 @@
 	.command-editor {
 		position: relative;
 		flex: none;
-		margin: 0.5rem 1.25rem 0;
+		margin: 0.25rem 1rem 0;
 		border: 1px solid var(--shell-border);
-		border-radius: 8px;
+		border-radius: 6px;
 		background: var(--shell-chrome);
 	}
 	.command-editor:focus-within {
@@ -476,8 +476,8 @@
 	.command-topline {
 		display: flex;
 		align-items: center;
-		gap: 10px;
-		padding: 4px 8px 0 14px;
+		gap: 8px;
+		padding: 3px 6px 0 12px;
 		font-size: 11px;
 		color: var(--shell-muted);
 	}
@@ -502,11 +502,11 @@
 	form {
 		display: flex;
 		align-items: flex-start;
-		gap: 0.7rem;
-		padding: 2px 12px 12px 14px;
+		gap: 0.5rem;
+		padding: 1px 8px 8px 12px;
 	}
 	.prompt {
-		color: var(--shell-accent);
+		color: var(--shell-muted);
 	}
 	.editor-field {
 		position: relative;
@@ -523,7 +523,7 @@
 		border: 0;
 		border-radius: 0;
 		font:
-			14px/1.6 'SFMono-Regular',
+			13px/1.5 'SFMono-Regular',
 			Consolas,
 			'Liberation Mono',
 			monospace;
@@ -545,11 +545,11 @@
 	}
 	textarea::selection {
 		background: var(--shell-selection);
-		color: #fff;
+		color: var(--shell-text);
 	}
 	textarea::placeholder {
-		color: var(--shell-muted);
-		opacity: 0.45;
+		color: var(--shell-subtle);
+		opacity: 1;
 	}
 	.highlight-viewport {
 		position: absolute;
@@ -563,17 +563,18 @@
 		color: var(--shell-text);
 	}
 	[data-token='command'] {
-		color: var(--shell-accent);
+		color: var(--shell-text);
+		font-weight: 600;
 	}
 	[data-token='keyword'],
 	[data-token='variable'] {
-		color: var(--shell-info);
+		color: var(--shell-accent);
 	}
 	[data-token='string'] {
-		color: var(--shell-warning);
+		color: #b4bcc4;
 	}
 	[data-token='operator'] {
-		color: var(--shell-success);
+		color: var(--shell-muted);
 	}
 	[data-token='option'] {
 		color: var(--shell-text);
@@ -629,7 +630,7 @@
 		flex-direction: column;
 		max-height: min(34rem, calc(100dvh - 18rem));
 		border: 1px solid var(--shell-border);
-		border-radius: 0.6rem;
+		border-radius: 6px;
 		background: var(--shell-raised);
 		box-shadow: 0 12px 40px #0008;
 	}
@@ -687,7 +688,7 @@
 	}
 	.command-row.current {
 		background: var(--shell-active);
-		box-shadow: inset 0 0 0 1px #d0f58224;
+		box-shadow: inset 0 0 0 1px var(--shell-border);
 	}
 	.load-command {
 		display: grid;
@@ -729,7 +730,7 @@
 		color: var(--shell-accent);
 	}
 	.pin-command:hover {
-		background: #d0f58215;
+		background: var(--shell-hover);
 	}
 	code {
 		display: block;
@@ -774,7 +775,7 @@
 	}
 	@media (max-width: 640px) {
 		.command-editor {
-			margin: 0.4rem 0.75rem 0;
+			margin: 0.25rem 0.75rem 0;
 		}
 		.prompt,
 		textarea,

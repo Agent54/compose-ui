@@ -72,6 +72,7 @@
 		logsCollection,
 		pauseServices,
 		projectsCollection,
+		projectStateRank,
 		refreshProjectsFromServer,
 		removeServices,
 		resolveBuildStreamUrl,
@@ -190,11 +191,13 @@
 	let serviceLogEntries = $state<Record<string, ServiceLogEntry[]>>({});
 	let serviceLogStreamErrors = $state<Record<string, string>>({});
 	let serviceLogPanels = $state<Record<string, boolean>>({});
+	let serviceLogErrorFilters = $state<Record<string, boolean>>({});
 	let serviceCommandInputs = $state<Record<string, string>>({});
 	let serviceCommandBusy = $state<Record<string, boolean>>({});
 	let processPanels = $state<Record<string, boolean>>({});
 	let configPanels = $state<Record<string, ConfigPanelState>>({});
 	let buildPanels = $state<Record<string, boolean>>({});
+	let buildErrorFilters = $state<Record<string, boolean>>({});
 	let toasts = $state<Toast[]>([]);
 	let toastSequence = 0;
 	const buildStreamControllers = new Map<string, AbortController>();
@@ -244,16 +247,6 @@
 	const memoryBuildFailure = $derived(memoryBuildFailures(builds, buildStreamEntries)[0]);
 	const diskBuildFailure = $derived(diskBuildFailures(builds, buildStreamEntries)[0]);
 
-	function stateRank(state: ComposeProject['state'] | ComposeService['state'] | 'mixed') {
-		if (state === 'running') return 0;
-		if (state === 'paused') return 1;
-		if (state === 'mixed') return 2;
-		if (state === 'exited' || state === 'stopped') return 3;
-		if (state === 'created' || state === 'unknown') return 4;
-		if (state === 'uncreated') return 5;
-		return 6;
-	}
-
 	function compareProjects(
 		left: ComposeProject,
 		right: ComposeProject,
@@ -271,7 +264,7 @@
 		const rightState = projectAggregateState(right);
 
 		return (
-			stateRank(leftState) - stateRank(rightState) ||
+			projectStateRank(leftState) - projectStateRank(rightState) ||
 			right.containerCount - left.containerCount ||
 			left.name.localeCompare(right.name)
 		);
@@ -626,6 +619,11 @@
 		};
 	}
 
+	function toggleBuildErrors(buildId: string) {
+		buildErrorFilters[buildId] = !buildErrorFilters[buildId];
+		buildPanels[buildId] = true;
+	}
+
 	function keepBuildOutputPinned(node: HTMLElement) {
 		let pinnedToEnd = true;
 		let animationFrame = 0;
@@ -678,6 +676,12 @@
 
 	function serviceLogErrorCount(project: ComposeProject, service: ComposeService) {
 		return serviceLogsFor(project, service).filter((entry) => entry.isError).length;
+	}
+
+	function toggleServiceLogErrors(project: ComposeProject, service: ComposeService) {
+		const key = serviceLogKey(project.id, service.id);
+		serviceLogErrorFilters[key] = !serviceLogErrorFilters[key];
+		if (!serviceLogOpen(project, service)) toggleServiceLogs(project, service);
 	}
 
 	function clearServiceLogs(project: ComposeProject, service: ComposeService) {
@@ -3532,7 +3536,7 @@
 										{project.name}
 									</span>
 									{#if shouldShowProjectRowStatus(project)}
-										<span class="project-status" class:restarting-status={projectRestarting(project)}>{projectPendingStatusLabel(project) || projectRowStatusLabel(project)}</span>
+										<span class="project-status">{projectPendingStatusLabel(project) || projectRowStatusLabel(project)}</span>
 									{/if}
 								</span>
 								<span class="project-meta">
@@ -3859,11 +3863,12 @@
 				{#if selectedProject && selectedServices.length}
 					<div class="compact-list">
 						{#each selectedServices as service (service.id)}
+							{@const errorsOnly = serviceLogErrorFilters[serviceLogKey(selectedProject.id, service.id)] ?? false}
+							{@const errorCount = serviceLogErrorCount(selectedProject, service)}
 							<div class="service-log-item">
 								<div class="service-log-header">
 									<button
 										class="compact-row service-log-button"
-										class:service-log-button-linked={service.state === 'running'}
 										type="button"
 										aria-pressed={serviceLogOpen(selectedProject, service)}
 										onmousedown={(event) => {
@@ -3881,11 +3886,6 @@
 											<div class="row-subtitle">{service.containerName}</div>
 										</div>
 										<div class="row-tail">
-											{#if serviceLogErrorCount(selectedProject, service)}
-												<span class="state-chip state-chip-exited">
-													{serviceLogErrorCount(selectedProject, service)} errors
-												</span>
-											{/if}
 											<span class={`state-chip ${serviceDisplayChipClass(selectedProject, service)}`}>
 												{serviceDisplayStateLabel(selectedProject, service)}
 											</span>
@@ -3897,6 +3897,18 @@
 									</button>
 
 									<div class="service-overview-actions">
+										<button
+											class="log-error-filter"
+											class:has-errors={errorCount > 0}
+											type="button"
+											aria-label={`Filter ${service.serviceName} logs to errors`}
+											aria-pressed={errorsOnly}
+											title={errorsOnly ? 'Show all log lines' : 'Show only errors'}
+											onclick={() => toggleServiceLogErrors(selectedProject, service)}
+										>
+											<Icon name="warning" size={14} />
+											{#if errorCount}<span>{errorCount}</span>{/if}
+										</button>
 										<ShellLink
 											config={uiState}
 											target={containerShellTarget(selectedProject, service)}
@@ -3926,10 +3938,11 @@
 										</div>
 									{/if}
 									{@const entries = serviceLogsFor(selectedProject, service)}
+									{@const visibleEntries = errorsOnly ? entries.filter((entry) => entry.isError) : entries}
 									<div class="service-log-output">
-										{#if entries.length}
+										{#if visibleEntries.length}
 											<div class="service-log-list">
-												{#each entries as entry (entry.id)}
+												{#each visibleEntries as entry (entry.id)}
 													<div
 														class:command-log-row={entry.isCommand}
 														class:error-log-row={entry.isError}
@@ -3951,7 +3964,7 @@
 											</div>
 										{:else}
 											<div class="config-output-state">
-												Waiting for logs…
+												{errorsOnly ? 'No error log lines.' : 'Waiting for logs…'}
 											</div>
 										{/if}
 										<form
@@ -4126,35 +4139,48 @@
 					<div class="build-list">
 						{#each selectedProjectBuilds as build (build.id)}
 							{@const entries = buildStreamEntriesForBuild(build.id)}
+							{@const errorsOnly = buildErrorFilters[build.id] ?? false}
+							{@const errorEntries = entries.filter((entry) => isErrorLogLine(entry.stream, entry.message))}
+							{@const visibleEntries = errorsOnly ? errorEntries : entries}
 							<div class="build-item" id={`build-${build.id}`}>
-								<button
-									class="build-button"
-									type="button"
-									aria-expanded={buildPanelOpen(build.id)}
-									onclick={() => toggleBuildPanel(build.id)}
-								>
-									<span class="build-copy">
-										<span class="row-title">
-											<span class="config-chevron">
-												<Icon name="chevron" size={12} rotated={buildPanelOpen(build.id)} />
+								<div class="build-log-header">
+									<button
+										class="build-button"
+										type="button"
+										aria-expanded={buildPanelOpen(build.id)}
+										onclick={() => toggleBuildPanel(build.id)}
+									>
+										<span class="build-copy">
+											<span class="row-title">
+												<span class="config-chevron">
+													<Icon name="chevron" size={12} rotated={buildPanelOpen(build.id)} />
+												</span>
+												{buildRowTitle(build)}
+												{#if build.status === 'running'}
+													<Icon name="refresh" size={12} spinning={true} />
+												{/if}
 											</span>
-											{buildRowTitle(build)}
-											{#if build.status === 'running'}
-												<Icon name="refresh" size={12} spinning={true} />
-											{:else if build.status === 'failed'}
-												<span class="output-error" aria-label="Build failed"
-													><Icon name="warning" size={14} /></span
-												>
-											{/if}
 										</span>
-									</span>
-									<span class="row-tail">
-										<span class={`state-chip ${buildStateChipClass(build)}`}>
-											{buildStatusLabel(build)}
+										<span class="row-tail">
+											<span class={`state-chip ${buildStateChipClass(build)}`}>
+												{buildStatusLabel(build)}
+											</span>
+											<span>{formatBuildTime(build.finishedAt ?? build.startedAt)}</span>
 										</span>
-										<span>{formatBuildTime(build.finishedAt ?? build.startedAt)}</span>
-									</span>
-								</button>
+									</button>
+									<button
+										class="log-error-filter"
+										class:has-errors={errorEntries.length > 0 || build.status === 'failed'}
+										type="button"
+										aria-label={`Filter ${buildRowTitle(build)} output to errors`}
+										aria-pressed={errorsOnly}
+										title={errorsOnly ? 'Show all build lines' : 'Show only errors'}
+										onclick={() => toggleBuildErrors(build.id)}
+									>
+										<Icon name="warning" size={14} />
+										{#if errorEntries.length}<span>{errorEntries.length}</span>{/if}
+									</button>
+								</div>
 
 								{#if buildPanelOpen(build.id)}
 									<div class="build-output" use:keepBuildOutputPinned>
@@ -4167,9 +4193,9 @@
 													>{/if}
 											</div>
 										{/if}
-										{#if entries.length}
+										{#if visibleEntries.length}
 											<div class="build-stream-list">
-												{#each entries as entry (entry.id)}
+												{#each visibleEntries as entry (entry.id)}
 													<div
 														class="build-stream-row"
 														class:output-error={isErrorLogLine(entry.stream, entry.message)}
@@ -4182,7 +4208,7 @@
 											</div>
 										{:else}
 											<div class="config-output-state">
-												{build.streamUrl ? 'Loading build output…' : 'Waiting for watch output…'}
+												{errorsOnly ? 'No error build lines.' : build.streamUrl ? 'Loading build output…' : 'Waiting for watch output…'}
 											</div>
 										{/if}
 									</div>
@@ -4589,10 +4615,6 @@
 		line-height: 1;
 		font-size: 0.72rem;
 		color: var(--app-text-muted);
-	}
-
-	.restarting-status {
-		color: #c76a68;
 	}
 
 	:global(.project-icon-uncreated) {
@@ -5111,8 +5133,8 @@
 		white-space: nowrap;
 	}
 
-	.disk-link { border: 1px solid var(--app-border-strong); cursor: pointer; }
-	.disk-link:hover { background: var(--app-control-hover); }
+	.disk-link { border: 1px solid transparent; cursor: pointer; }
+	.disk-link:hover { border-color: var(--app-border-strong); background: var(--app-control-hover); }
 	.disk-link:focus-visible { outline: 2px solid #1d9bf0 !important; outline-offset: 3px; }
 	.mobile-disk-link { display: none; }
 	.mobile-shell-link { display: none; }
@@ -5283,7 +5305,6 @@
 	.config-list,
 	.build-list,
 	.build-stream-list,
-	.process-list,
 	.log-list {
 		display: flex;
 		min-height: 0;
@@ -5317,8 +5338,47 @@
 		gap: 0.12rem;
 	}
 
-	.service-log-header {
-		position: relative;
+	.service-log-header,
+	.build-log-header {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		border-radius: 0.65rem;
+		padding-right: 0.55rem;
+		background: var(--app-surface-raised);
+	}
+
+	.log-error-filter {
+		display: inline-flex;
+		flex: none;
+		align-items: center;
+		justify-content: center;
+		gap: 0.3rem;
+		min-width: 2rem;
+		height: 2rem;
+		padding: 0 0.45rem;
+		border: 1px solid var(--app-border);
+		border-radius: 0.55rem;
+		background: var(--app-control);
+		color: var(--app-text-muted);
+		font-size: 0.72rem;
+		cursor: pointer;
+	}
+
+	.log-error-filter.has-errors {
+		color: #c76a68;
+	}
+
+	.log-error-filter:hover,
+	.log-error-filter:focus-visible {
+		border-color: var(--app-border-strong);
+		background: var(--app-control-hover);
+	}
+
+	.log-error-filter[aria-pressed='true'] {
+		border-color: #c76a68;
+		background: rgba(141, 61, 61, 0.2);
+		color: #e8a09e;
 	}
 
 	.config-button,
@@ -5370,21 +5430,18 @@
 	}
 
 	.service-log-button {
-		width: 100%;
 		text-align: left;
 	}
 
-	.service-log-button { padding-right: 3.3rem; }
-	.service-log-button-linked {
-		padding-right: 7.7rem;
+	.service-log-button,
+	.build-button {
+		flex: 1;
+		min-width: 0;
 	}
 
 	.service-overview-actions {
-		position: absolute;
-		top: 50%;
-		transform: translateY(-50%);
-		right: 0.55rem;
 		display: flex;
+		flex: none;
 		align-items: center;
 		gap: 0.45rem;
 	}
@@ -5690,6 +5747,12 @@
 		min-width: 0;
 		overflow-wrap: anywhere;
 		color: var(--app-text);
+	}
+
+	.process-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
 	}
 
 	.process-group {

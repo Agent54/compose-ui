@@ -2,7 +2,12 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
 import { loadProjectServices, refreshProjectsFromServer } from '../src/lib/central/api.ts';
-import { isProjectRestarting, isServiceRestarting } from '../src/lib/central/service-state.ts';
+import {
+	isProjectRestarting,
+	isServiceRestarting,
+	projectStateRank,
+	serviceStateRank
+} from '../src/lib/central/service-state.ts';
 import type { ComposeProject, ComposeService, UiState } from '../src/lib/central/types.ts';
 
 const ui: UiState = {
@@ -28,6 +33,31 @@ const service: Pick<ComposeService, 'id' | 'projectId' | 'state'> = {
 	projectId: 'demo',
 	state: 'restarting'
 };
+
+test('restarting projects keep the running sort priority with or without running siblings', () => {
+	const runningSibling = { ...service, id: 'demo:worker-container', state: 'running' as const };
+	for (const children of [[service], [service, runningSibling]]) {
+		const state = isProjectRestarting(project, children) ? 'restarting' : project.state;
+		assert.equal(projectStateRank(state), projectStateRank('running'));
+		for (const inactiveState of ['paused', 'mixed', 'exited', 'stopped', 'uncreated'] as const) {
+			assert.ok(projectStateRank(state) < projectStateRank(inactiveState));
+		}
+	}
+});
+
+test('container restart sort priority stays active through backend and local restart states', () => {
+	for (const state of ['running', 'restarting', 'exited', 'created'] as const) {
+		const restarting = { ...service, state };
+		const sortState = isServiceRestarting(restarting, `restart:demo:${service.id}`)
+			? 'restarting'
+			: restarting.state;
+		assert.equal(serviceStateRank(sortState), serviceStateRank('running'));
+	}
+	assert.equal(serviceStateRank(service.state), serviceStateRank('running'));
+	for (const state of ['paused', 'exited', 'created', 'unknown', 'uncreated'] as const) {
+		assert.ok(serviceStateRank('restarting') < serviceStateRank(state));
+	}
+});
 
 test('backend restarting states survive parsing even when active flags or running state lag', async () => {
 	const originalFetch = globalThis.fetch;
