@@ -3,6 +3,7 @@
 	import { useLiveQuery } from '@tanstack/svelte-db';
 
 	import { latestBuildFailure } from '$lib/central/build-state';
+	import type { ServiceAction } from '$lib/central/action-queue';
 	import type { ComposeBuild } from '$lib/central/types';
 	import Icon from '$lib/components/Icon.svelte';
 	import ShellLink from '$lib/components/ShellLink.svelte';
@@ -22,6 +23,7 @@
 		shellConfig,
 		selectedContainerId,
 		busyAction,
+		queuedActions,
 		builds,
 		sortBy,
 		refreshEpoch,
@@ -36,6 +38,7 @@
 		shellConfig: ShellConfig | null | undefined;
 		selectedContainerId: string;
 		busyAction: string | null;
+		queuedActions: ServiceAction[];
 		builds: ComposeBuild[];
 		sortBy: 'path' | 'name' | 'status';
 		refreshEpoch: number;
@@ -155,7 +158,7 @@
 	}
 
 	function servicePendingStatusLabel(service: ComposeService) {
-		return servicePendingStatus(service, builds, busyAction);
+		return servicePendingStatus(service, builds, busyAction, queuedActions);
 	}
 
 	function serviceDisplayStatusLabel(service: ComposeService) {
@@ -265,7 +268,9 @@
 								if (!isPrimaryMouse(event)) return;
 								onStartStop(project, service);
 							}}
-							disabled={busyAction !== null}
+							disabled={['running', 'paused', 'restarting'].includes(service.state)
+								? busyAction !== null
+								: Boolean(servicePendingStatusLabel(service))}
 						>
 							<Icon
 								name={busyAction === `stop:${project.id}:${service.id}`
@@ -310,7 +315,7 @@
 									if (!isPrimaryMouse(event)) return;
 									onPauseToggle(project, service);
 								}}
-								disabled={busyAction !== null}
+								disabled={Boolean(servicePendingStatusLabel(service))}
 							>
 								<Icon name="play" size={13} />
 							</button>
@@ -474,8 +479,9 @@
 		transition: opacity 120ms ease;
 	}
 
-	.service-row:hover .service-meta {
-		opacity: 0;
+	.service-row:hover .service-meta,
+	.service-row:focus-within .service-meta {
+		visibility: hidden;
 	}
 
 	.service-status {
@@ -557,7 +563,7 @@
 
 	.overlay-button:disabled {
 		cursor: default;
-		opacity: 0.55;
+		color: color-mix(in srgb, var(--app-text-muted) 55%, var(--app-surface-raised));
 	}
 
 	.tooltip-anchor,

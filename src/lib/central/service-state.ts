@@ -1,9 +1,11 @@
 import type { ComposeBuild, ComposeProject, ComposeService } from './types';
+import { actionTargetsOverlap, type ServiceAction } from './action-queue';
 
 export function servicePendingStatus(
 	service: Pick<ComposeService, 'id' | 'projectId' | 'projectName' | 'serviceName' | 'state'>,
 	builds: readonly ComposeBuild[],
-	busyAction: string | null = null
+	busyAction: string | null = null,
+	queuedActions: readonly ServiceAction[] = []
 ) {
 	const matches = (kind: string) =>
 		busyAction === `${kind}:${service.projectId}:project` ||
@@ -12,7 +14,8 @@ export function servicePendingStatus(
 	if (matches('stop')) return 'stopping';
 	if (isServiceRestarting(service, busyAction)) return 'restarting';
 	if (matches('remove')) return 'removing';
-	if (matches('start') || matches('up-no-build') || matches('watching')) return 'starting';
+	if (matches('start') || matches('up-no-build') || matches('watching') || matches('unpause'))
+		return 'starting';
 
 	const building = builds.some((build) => {
 		if (
@@ -30,7 +33,15 @@ export function servicePendingStatus(
 		return !names.length || names.includes(service.serviceName);
 	});
 
-	return building ? 'building' : '';
+	if (building) return 'building';
+	return queuedActions.some((action) =>
+		actionTargetsOverlap(action, {
+			projectId: service.projectId,
+			serviceId: service.id
+		})
+	)
+		? 'queued'
+		: '';
 }
 
 export function isServiceRestarting(

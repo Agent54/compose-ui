@@ -15,6 +15,7 @@
 		mergeBuilds
 	} from '$lib/central/build-state';
 	import { composeActionPaths, composeStartupPaths } from '$lib/central/service-actions';
+	import { ServiceActionQueue, type ServiceAction } from '$lib/central/action-queue';
 	import { vmDiskMetrics, vmHostMetrics } from '$lib/central/vm-resource-metrics';
 	import {
 		fileDescriptorUrl, pollFileDescriptors, serviceDescriptorMetric, serviceWatcherMetric, vmDescriptorMetric,
@@ -334,6 +335,15 @@
 	);
 	let refreshing = $state(false);
 	let busyAction = $state<string | null>(null);
+	let queuedActions = $state<ServiceAction[]>([]);
+	const actionQueue = new ServiceActionQueue((active, pending) => {
+		busyAction = active ? `${active.kind}:${active.projectId}:${active.serviceId ?? 'project'}` : null;
+		queuedActions = pending;
+	});
+
+	function startActionDisabled(project: ComposeProject) {
+		return Boolean(projectPendingStatusLabel(project));
+	}
 	let topLoading = $state(false);
 	let topError = $state('');
 	let processSnapshots = $state<ComposeProcessSnapshot[]>([]);
@@ -837,7 +847,7 @@
 	}
 
 	function busyActionKindForProject(projectId: string) {
-		for (const kind of ['stop', 'start', 'up-no-build', 'restart', 'watching', 'remove']) {
+		for (const kind of ['stop', 'start', 'up-no-build', 'restart', 'watching', 'remove', 'unpause']) {
 			if (busyAction?.startsWith(`${kind}:${projectId}:`)) {
 				return kind;
 			}
@@ -887,11 +897,11 @@
 			return 'removing';
 		}
 
-		if (busyKind === 'start' || busyKind === 'up-no-build' || busyKind === 'watching') {
+		if (busyKind === 'start' || busyKind === 'up-no-build' || busyKind === 'watching' || busyKind === 'unpause') {
 			return 'starting';
 		}
 
-		return '';
+		return queuedActions.some((action) => action.projectId === project.id) ? 'queued' : '';
 	}
 
 	function projectDisplayStatusLabel(project: ComposeProject | undefined) {
@@ -927,7 +937,7 @@
 	}
 
 	function servicePendingStatusLabel(project: ComposeProject | undefined, service: ComposeService) {
-		return project ? servicePendingStatus(service, builds, busyAction) : '';
+		return project ? servicePendingStatus(service, builds, busyAction, queuedActions) : '';
 	}
 
 	function serviceDisplayStateLabel(project: ComposeProject | undefined, service: ComposeService) {
@@ -1769,6 +1779,7 @@
 
 		return () => {
 			disposed = true;
+			actionQueue.close();
 			document.removeEventListener('visibilitychange', poll);
 			window.removeEventListener('hashchange', handleHashChange);
 			window.clearInterval(intervalId);
@@ -2821,7 +2832,7 @@
 	}
 
 	async function handleStartStopToggle(project = selectedProject, service?: ComposeService) {
-		if (!project || !uiState || busyAction) {
+		if (!project || !uiState) {
 			return;
 		}
 
@@ -2829,7 +2840,13 @@
 		const shouldStop = service
 			? ['running', 'paused', 'restarting'].includes(service.state)
 			: projectCanStop(project);
-		busyAction = `${shouldStop ? 'stop' : 'start'}:${project.id}:${service?.id ?? 'project'}`;
+		if (shouldStop && busyAction) return;
+		const release = await actionQueue.acquire({
+			kind: shouldStop ? 'stop' : 'start',
+			projectId: project.id,
+			serviceId: service?.id
+		});
+		if (!release) return;
 
 		try {
 			const actionPaths = actionComposePaths(project, service);
@@ -2917,18 +2934,23 @@
 			);
 			reportActionError(project, shouldStop ? 'Stop failed' : 'Start failed', message);
 		} finally {
-			busyAction = null;
+			release();
 			void refreshBuildState();
 		}
 	}
 
 	async function handleStartWithoutRebuild(project = selectedProject, service?: ComposeService) {
-		if (!project || !uiState || busyAction) {
+		if (!project || !uiState) {
 			return;
 		}
 
 		const serviceNames = service ? [service.serviceName] : undefined;
-		busyAction = `up-no-build:${project.id}:${service?.id ?? 'project'}`;
+		const release = await actionQueue.acquire({
+			kind: 'up-no-build',
+			projectId: project.id,
+			serviceId: service?.id
+		});
+		if (!release) return;
 
 		try {
 			const actionPaths = actionComposePaths(project, service);
@@ -2961,7 +2983,7 @@
 			);
 			reportActionError(project, 'Start failed', message);
 		} finally {
-			busyAction = null;
+			release();
 			void refreshBuildState();
 		}
 	}
@@ -2974,7 +2996,12 @@
 		const serviceNames = service ? [service.serviceName] : undefined;
 		const targetName = service?.serviceName ?? project.name;
 		const keepWatching = projectWatchActive(project);
-		busyAction = `restart:${project.id}:${service?.id ?? 'project'}`;
+		const release = await actionQueue.acquire({
+			kind: 'restart',
+			projectId: project.id,
+			serviceId: service?.id
+		});
+		if (!release) return;
 
 		try {
 			const actionPaths = actionComposePaths(project, service);
@@ -3003,7 +3030,7 @@
 			const message = errorMessage(error, `Failed to restart ${targetName}.`);
 			reportActionError(project, 'Restart failed', message);
 		} finally {
-			busyAction = null;
+			release();
 			void refreshBuildState();
 		}
 	}
@@ -3023,7 +3050,12 @@
 		}
 
 		const serviceNames = service ? [service.serviceName] : undefined;
-		busyAction = `remove:${project.id}:${service?.id ?? 'project'}`;
+		const release = await actionQueue.acquire({
+			kind: 'remove',
+			projectId: project.id,
+			serviceId: service?.id
+		});
+		if (!release) return;
 
 		try {
 			const actionPaths = actionComposePaths(project, service);
@@ -3044,19 +3076,25 @@
 			const message = errorMessage(error, `Failed to remove ${targetName}.`);
 			reportActionError(project, 'Remove failed', message);
 		} finally {
-			busyAction = null;
+			release();
 			void refreshBuildState();
 		}
 	}
 
 	async function handlePauseToggle(project = selectedProject, service?: ComposeService) {
-		if (!project || !uiState || busyAction) {
+		if (!project || !uiState) {
 			return;
 		}
 
 		const isUnpause = service ? service.state === 'paused' : isProjectFullyPaused(project);
+		if (!isUnpause && busyAction) return;
 		const serviceNames = service ? [service.serviceName] : undefined;
-		busyAction = `${isUnpause ? 'unpause' : 'pause'}:${project.id}:${service?.id ?? 'project'}`;
+		const release = await actionQueue.acquire({
+			kind: isUnpause ? 'unpause' : 'pause',
+			projectId: project.id,
+			serviceId: service?.id
+		});
+		if (!release) return;
 
 		try {
 			const actionPaths = actionComposePaths(project, service);
@@ -3098,7 +3136,7 @@
 			);
 			reportActionError(project, isUnpause ? 'Resume failed' : 'Pause failed', message);
 		} finally {
-			busyAction = null;
+			release();
 			void refreshBuildState();
 		}
 	}
@@ -3110,7 +3148,12 @@
 
 		const nextWatching = !project.watching;
 		const serviceNames = service ? [service.serviceName] : undefined;
-		busyAction = `watching:${project.id}:${service?.id ?? 'project'}`;
+		const release = await actionQueue.acquire({
+			kind: 'watching',
+			projectId: project.id,
+			serviceId: service?.id
+		});
+		if (!release) return;
 
 		try {
 			const actionPaths = actionComposePaths(project, service);
@@ -3155,7 +3198,7 @@
 			);
 			reportActionError(project, nextWatching ? 'Watch failed' : 'Watch stop failed', message);
 		} finally {
-			busyAction = null;
+			release();
 			void refreshBuildState();
 		}
 	}
@@ -3517,7 +3560,7 @@
 												if (!isPrimaryMouse(event)) return;
 												handleStartStopToggle(project);
 											}}
-											disabled={busyAction !== null}
+											disabled={projectCanStop(project) ? busyAction !== null : startActionDisabled(project)}
 										>
 											<Icon
 												name={busyAction === `stop:${project.id}:project` ? 'refresh' : projectCanStop(project) ? 'stop' : 'play'}
@@ -3565,7 +3608,7 @@
 												if (!isPrimaryMouse(event)) return;
 												handlePauseToggle(project);
 											}}
-											disabled={busyAction !== null}
+											disabled={startActionDisabled(project)}
 										>
 											<Icon name="play" size={13} />
 										</button>
@@ -3602,6 +3645,7 @@
 								shellConfig={uiState}
 								{selectedContainerId}
 								{busyAction}
+								{queuedActions}
 								{builds}
 								sortBy={uiState?.sortBy ?? 'status'}
 								refreshEpoch={serviceQueryEpoch}
@@ -4590,6 +4634,11 @@
 		transform: translateX(-6px);
 	}
 
+	.project-row:hover .project-meta,
+	.project-row:focus-within .project-meta {
+		visibility: hidden;
+	}
+
 	.project-watch-indicator {
 		display: inline-flex;
 		align-items: center;
@@ -4706,7 +4755,8 @@
 		z-index: 3;
 	}
 
-	.project-row:hover .row-actions {
+	.project-row:hover .row-actions,
+	.project-row:focus-within .row-actions {
 		opacity: 1;
 		pointer-events: auto;
 	}
@@ -4731,7 +4781,7 @@
 
 	.overlay-button:disabled {
 		cursor: default;
-		opacity: 0.55;
+		color: color-mix(in srgb, var(--app-text-muted) 55%, var(--app-surface-raised));
 	}
 
 	.tooltip-anchor,
