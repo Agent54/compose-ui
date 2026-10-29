@@ -1,7 +1,66 @@
 import type { ComposeBuild, ComposeProject, ComposeService } from './types';
-import { actionTargetsOverlap, type ServiceAction } from './action-queue';
+import {
+	actionTargetsOverlap,
+	hasActiveAction,
+	type ServiceAction,
+	type ServiceActionTarget
+} from './action-state';
 
-export function projectStateRank(state: ComposeProject['state'] | ComposeService['state'] | 'mixed') {
+const actionStatuses = {
+	start: 'starting',
+	'up-no-build': 'starting',
+	unpause: 'starting',
+	stop: 'stopping',
+	restart: 'restarting',
+	remove: 'removing',
+	pause: 'pausing',
+	watching: 'updating watch'
+} as const;
+
+type PendingTarget = ServiceActionTarget & { projectName: string; serviceName?: string };
+type PendingService = Pick<
+	ComposeService,
+	'id' | 'projectId' | 'projectName' | 'serviceName' | 'state'
+>;
+
+function activeActionStatus(target: ServiceActionTarget, activeActions: readonly ServiceAction[]) {
+	const action = activeActions.find((action) => actionTargetsOverlap(action, target));
+	return action ? (actionStatuses[action.kind as keyof typeof actionStatuses] ?? '') : '';
+}
+
+// A project has the same scope as all of its children. Only the target changes;
+// requests and builds are resolved identically at both levels.
+function pendingStatus(
+	target: PendingTarget,
+	builds: readonly ComposeBuild[],
+	activeActions: readonly ServiceAction[],
+	restarting: boolean
+) {
+	const action = activeActionStatus(target, activeActions);
+	if (action) return action;
+	if (restarting) return 'restarting';
+	if (
+		builds.some((build) => {
+			if (
+				build.status !== 'running' ||
+				(build.projectId !== target.projectId && build.projectName !== target.projectName)
+			)
+				return false;
+			const names = build.serviceNames?.length
+				? build.serviceNames
+				: build.serviceName
+					? [build.serviceName]
+					: [];
+			return !target.serviceName || !names.length || names.includes(target.serviceName);
+		})
+	)
+		return 'building';
+	return '';
+}
+
+export function projectStateRank(
+	state: ComposeProject['state'] | ComposeService['state'] | 'mixed'
+) {
 	if (state === 'running' || state === 'restarting') return 0;
 	if (state === 'paused') return 1;
 	if (state === 'mixed') return 2;
@@ -22,67 +81,66 @@ export function serviceStateRank(state: ComposeService['state']) {
 }
 
 export function servicePendingStatus(
-	service: Pick<ComposeService, 'id' | 'projectId' | 'projectName' | 'serviceName' | 'state'>,
+	service: PendingService,
 	builds: readonly ComposeBuild[],
-	busyAction: string | null = null,
-	queuedActions: readonly ServiceAction[] = []
+	activeActions: readonly ServiceAction[] = []
 ) {
-	const matches = (kind: string) =>
-		busyAction === `${kind}:${service.projectId}:project` ||
-		busyAction === `${kind}:${service.projectId}:${service.id}`;
-
-	if (matches('stop')) return 'stopping';
-	if (isServiceRestarting(service, busyAction)) return 'restarting';
-	if (matches('remove')) return 'removing';
-	if (matches('start') || matches('up-no-build') || matches('watching') || matches('unpause'))
-		return 'starting';
-
-	const building = builds.some((build) => {
-		if (
-			build.status !== 'running' ||
-			(build.projectId !== service.projectId && build.projectName !== service.projectName)
-		) {
-			return false;
-		}
-
-		const names = build.serviceNames?.length
-			? build.serviceNames
-			: build.serviceName
-				? [build.serviceName]
-				: [];
-		return !names.length || names.includes(service.serviceName);
-	});
-
-	if (building) return 'building';
-	return queuedActions.some((action) =>
-		actionTargetsOverlap(action, {
+	return pendingStatus(
+		{
 			projectId: service.projectId,
-			serviceId: service.id
-		})
-	)
-		? 'queued'
-		: '';
+			projectName: service.projectName,
+			serviceId: service.id,
+			serviceName: service.serviceName
+		},
+		builds,
+		activeActions,
+		service.state === 'restarting'
+	);
+}
+
+export function projectPendingStatus(
+	project: Pick<ComposeProject, 'id' | 'name' | 'state' | 'statusLabel'>,
+	services: readonly PendingService[],
+	builds: readonly ComposeBuild[],
+	activeActions: readonly ServiceAction[] = []
+) {
+	return (
+		pendingStatus(
+			{ projectId: project.id, projectName: project.name },
+			builds,
+			activeActions,
+			isProjectRestarting(project, services, activeActions)
+		) ||
+		services
+			.filter((service) => service.projectId === project.id)
+			.map((service) => servicePendingStatus(service, builds, activeActions))
+			.find(Boolean) ||
+		''
+	);
 }
 
 export function isServiceRestarting(
 	service: Pick<ComposeService, 'id' | 'projectId' | 'state'>,
-	busyAction: string | null = null
+	activeActions: readonly ServiceAction[] = []
 ) {
 	return (
 		service.state === 'restarting' ||
-		busyAction === `restart:${service.projectId}:${service.id}` ||
-		busyAction === `restart:${service.projectId}:project`
+		hasActiveAction(
+			activeActions,
+			{ projectId: service.projectId, serviceId: service.id },
+			'restart'
+		)
 	);
 }
 
 export function isProjectRestarting(
 	project: Pick<ComposeProject, 'id' | 'state' | 'statusLabel'>,
 	services: ReadonlyArray<Pick<ComposeService, 'id' | 'projectId' | 'state'>>,
-	busyAction: string | null = null
+	activeActions: readonly ServiceAction[] = []
 ) {
 	return (
 		project.state === 'restarting' ||
-		Boolean(busyAction?.startsWith(`restart:${project.id}:`)) ||
+		hasActiveAction(activeActions, { projectId: project.id }, 'restart') ||
 		[...project.statusLabel.matchAll(/\brestarting\b(?:\((\d+)\))?/gi)].some(
 			(match) => match[1] === undefined || Number(match[1]) > 0
 		) ||

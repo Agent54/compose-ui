@@ -3,7 +3,7 @@
 	import { useLiveQuery } from '@tanstack/svelte-db';
 
 	import { latestBuildFailure } from '$lib/central/build-state';
-	import type { ServiceAction } from '$lib/central/action-queue';
+	import { hasActiveAction, type ServiceAction } from '$lib/central/action-state';
 	import type { ComposeBuild } from '$lib/central/types';
 	import Icon from '$lib/components/Icon.svelte';
 	import ShellLink from '$lib/components/ShellLink.svelte';
@@ -23,8 +23,7 @@
 		project,
 		shellConfig,
 		selectedContainerId,
-		busyAction,
-		queuedActions,
+		activeActions,
 		builds,
 		sortBy,
 		refreshEpoch,
@@ -38,8 +37,7 @@
 		project: ComposeProject;
 		shellConfig: ShellConfig | null | undefined;
 		selectedContainerId: string;
-		busyAction: string | null;
-		queuedActions: ServiceAction[];
+		activeActions: ServiceAction[];
 		builds: ComposeBuild[];
 		sortBy: 'path' | 'name' | 'status';
 		refreshEpoch: number;
@@ -69,8 +67,10 @@
 		return entries.sort((left, right) => {
 			if (sortBy === 'status') {
 				return (
-					serviceStateRank(isServiceRestarting(left, busyAction) ? 'restarting' : left.state) -
-						serviceStateRank(isServiceRestarting(right, busyAction) ? 'restarting' : right.state) ||
+					serviceStateRank(isServiceRestarting(left, activeActions) ? 'restarting' : left.state) -
+						serviceStateRank(
+							isServiceRestarting(right, activeActions) ? 'restarting' : right.state
+						) ||
 					left.serviceName.localeCompare(right.serviceName) ||
 					left.containerName.localeCompare(right.containerName)
 				);
@@ -150,7 +150,15 @@
 	}
 
 	function servicePendingStatusLabel(service: ComposeService) {
-		return servicePendingStatus(service, builds, busyAction, queuedActions);
+		return servicePendingStatus(service, builds, activeActions);
+	}
+
+	function actionPending(service: ComposeService) {
+		return hasActiveAction(activeActions, { projectId: project.id, serviceId: service.id });
+	}
+
+	function actionActive(kind: ServiceAction['kind'], service: ComposeService) {
+		return hasActiveAction(activeActions, { projectId: project.id, serviceId: service.id }, kind);
 	}
 
 	function serviceDisplayStatusLabel(service: ComposeService) {
@@ -229,7 +237,6 @@
 						target={containerShellTarget(project, service)}
 						label={`${shellActionLabel(service.state)} for ${service.serviceName}`}
 						compact
-						disabled={busyAction !== null}
 					/>
 					{#if service.state === 'running'}
 						<span class="tooltip-anchor" data-tooltip={`Open ${composeServiceUrl(service)}`}>
@@ -258,17 +265,17 @@
 								onStartStop(project, service);
 							}}
 							disabled={['running', 'paused', 'restarting'].includes(service.state)
-								? busyAction !== null
+								? actionPending(service)
 								: Boolean(servicePendingStatusLabel(service))}
 						>
 							<Icon
-								name={busyAction === `stop:${project.id}:${service.id}`
+								name={actionActive('stop', service)
 									? 'refresh'
 									: ['running', 'paused', 'restarting'].includes(service.state)
 										? 'stop'
 										: 'play'}
 								size={13}
-								spinning={busyAction === `stop:${project.id}:${service.id}`}
+								spinning={actionActive('stop', service)}
 							/>
 						</button>
 					</span>
@@ -283,13 +290,9 @@
 									if (!isPrimaryMouse(event)) return;
 									onRestart(project, service);
 								}}
-								disabled={busyAction !== null}
+								disabled={actionPending(service)}
 							>
-								<Icon
-									name="refresh"
-									size={13}
-									spinning={busyAction === `restart:${project.id}:${service.id}`}
-								/>
+								<Icon name="refresh" size={13} spinning={actionActive('restart', service)} />
 							</button>
 						</span>
 					{/if}
@@ -323,16 +326,16 @@
 								if (!isPrimaryMouse(event)) return;
 								onWatchingToggle(project, service);
 							}}
-							disabled={busyAction !== null}
+							disabled={actionPending(service)}
 						>
 							<Icon
-								name={busyAction === `watching:${project.id}:${service.id}`
+								name={actionActive('watching', service)
 									? 'refresh'
 									: project.watching
 										? 'eye-off'
 										: 'eye'}
 								size={13}
-								spinning={busyAction === `watching:${project.id}:${service.id}`}
+								spinning={actionActive('watching', service)}
 							/>
 						</button>
 					</span>

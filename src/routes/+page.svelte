@@ -15,7 +15,11 @@
 		mergeBuilds
 	} from '$lib/central/build-state';
 	import { composeActionPaths, composeStartupPaths } from '$lib/central/service-actions';
-	import { ServiceActionQueue, type ServiceAction } from '$lib/central/action-queue';
+	import {
+		hasActiveAction,
+		ServiceActionTracker,
+		type ServiceAction
+	} from '$lib/central/action-state';
 	import { vmDiskMetrics, vmHostMetrics } from '$lib/central/vm-resource-metrics';
 	import {
 		fileDescriptorUrl, pollFileDescriptors, serviceDescriptorMetric, serviceWatcherMetric, vmDescriptorMetric,
@@ -82,6 +86,7 @@
 		settingsCollection,
 		servicesCollection,
 		servicePendingStatus,
+		projectPendingStatus,
 		setConnectionState,
 		setProjectExpanded,
 		setSidebarWidth,
@@ -118,11 +123,6 @@
 		x: number;
 		y: number;
 		items: ContextMenuItem[];
-	};
-
-	type ActiveBuildTarget = {
-		projectId: string;
-		serviceId?: string;
 	};
 
 	type BuildStreamEntry = {
@@ -186,7 +186,6 @@
 	let searchExpanded = $state(false);
 	let searchInput: HTMLInputElement | null = null;
 	let dragSidebarWidth = $state<number | null>(null);
-	let activeBuildTargets = $state<Record<string, ActiveBuildTarget>>({});
 	let buildStreamEntries = $state<BuildStreamEntry[]>([]);
 	let serviceLogEntries = $state<Record<string, ServiceLogEntry[]>>({});
 	let serviceLogStreamErrors = $state<Record<string, string>>({});
@@ -211,7 +210,6 @@
 	const execCommandLogEntries = new Map<string, { key: string; entryId: string }>();
 	const pendingExecCompletions = new Map<string, number>();
 	const watchBuildIds = new Map<string, string>();
-	const watchBuildTargets = new Map<string, ActiveBuildTarget>();
 
 	const uiQuery = useLiveQuery((q) => q.from({ ui: uiStateCollection }));
 	const projectsQuery = useLiveQuery((q) => q.from({ projects: projectsCollection }));
@@ -327,12 +325,20 @@
 		selectedProject ? allLogs.filter((entry) => entry.projectId === selectedProject.id).slice().reverse() : []
 	);
 	let refreshing = $state(false);
-	let busyAction = $state<string | null>(null);
-	let queuedActions = $state<ServiceAction[]>([]);
-	const actionQueue = new ServiceActionQueue((active, pending) => {
-		busyAction = active ? `${active.kind}:${active.projectId}:${active.serviceId ?? 'project'}` : null;
-		queuedActions = pending;
+	let activeActions = $state<ServiceAction[]>([]);
+	const actionTracker = new ServiceActionTracker((active) => {
+		activeActions = active;
 	});
+
+	function actionPending(project: ComposeProject, service?: ComposeService) {
+		return hasActiveAction(activeActions, { projectId: project.id, serviceId: service?.id });
+	}
+
+	function actionActive(
+		kind: ServiceAction['kind'], project: ComposeProject, service?: ComposeService
+	) {
+		return hasActiveAction(activeActions, { projectId: project.id, serviceId: service?.id }, kind);
+	}
 
 	function startActionDisabled(project: ComposeProject) {
 		return Boolean(projectPendingStatusLabel(project));
@@ -609,7 +615,16 @@
 	}
 
 	function buildPanelOpen(buildId: string) {
-		return buildPanels[buildId] ?? true;
+		const currentBuild = selectedProjectBuilds[0];
+		return (
+			buildPanels[buildId] ??
+			(currentBuild?.id === buildId &&
+				(currentBuild.status === 'failed' ||
+					Boolean(buildStreamErrors[buildId]) ||
+					buildStreamEntriesForBuild(buildId).some((entry) =>
+						isErrorLogLine(entry.stream, entry.message)
+					)))
+		);
 	}
 
 	function toggleBuildPanel(buildId: string) {
@@ -820,92 +835,16 @@
 		}
 	}
 
-	function setActiveBuildTarget(buildId: string, target: ActiveBuildTarget | null) {
-		const nextTargets = { ...activeBuildTargets };
-
-		if (target) {
-			nextTargets[buildId] = target;
-		} else {
-			delete nextTargets[buildId];
-		}
-
-		activeBuildTargets = nextTargets;
-	}
-
-	function activeBuildTarget(projectId: string) {
-		const current = builds;
-
-		for (const [buildId, target] of Object.entries(activeBuildTargets)) {
-			const build = current.find((entry) => entry.id === buildId);
-
-			if (!build || build.status !== 'running') {
-				continue;
-			}
-
-			if (target.projectId === projectId) {
-				return target;
-			}
-		}
-
-		return null;
-	}
-
-	function busyActionKindForProject(projectId: string) {
-		for (const kind of ['stop', 'start', 'up-no-build', 'restart', 'watching', 'remove', 'unpause']) {
-			if (busyAction?.startsWith(`${kind}:${projectId}:`)) {
-				return kind;
-			}
-		}
-
-		return '';
-	}
-
 	function projectStartButtonSpinning(project: ComposeProject) {
-		const target = activeBuildTarget(project.id);
-		return projectRestarting(project) || Boolean(target) || Boolean(busyActionKindForProject(project.id));
+		return Boolean(projectPendingStatusLabel(project));
 	}
 
 	function projectRestarting(project: ComposeProject) {
-		return isProjectRestarting(project, sidebarServices, busyAction);
+		return isProjectRestarting(project, sidebarServices, activeActions);
 	}
 
 	function projectPendingStatusLabel(project: ComposeProject) {
-		if (busyActionKindForProject(project.id) === 'stop') {
-			return 'stopping';
-		}
-
-		if (projectRestarting(project)) {
-			return 'restarting';
-		}
-
-		if (busyAction === `watching:${project.id}:project`) {
-			return project.watching ? 'stopping watch' : 'enabling watch';
-		}
-
-		if (
-			busyAction === `start:${project.id}:project` ||
-			busyAction === `up-no-build:${project.id}:project`
-		) {
-			return 'starting';
-		}
-
-		const target = activeBuildTarget(project.id);
-
-		if (target) {
-			return 'building';
-		}
-
-		const busyKind = busyActionKindForProject(project.id);
-
-		if (busyKind === 'remove') {
-			return 'removing';
-		}
-
-		if (busyKind === 'start' || busyKind === 'up-no-build' || busyKind === 'watching' || busyKind === 'unpause') {
-			return 'starting';
-		}
-
-		return queuedActions.some((action) => action.projectId === project.id) ? 'queued' : '';
+		return projectPendingStatus(project, sidebarServices, builds, activeActions);
 	}
 
 	function projectDisplayStatusLabel(project: ComposeProject | undefined) {
@@ -941,7 +880,7 @@
 	}
 
 	function servicePendingStatusLabel(project: ComposeProject | undefined, service: ComposeService) {
-		return project ? servicePendingStatus(service, builds, busyAction, queuedActions) : '';
+		return project ? servicePendingStatus(service, builds, activeActions) : '';
 	}
 
 	function serviceDisplayStateLabel(project: ComposeProject | undefined, service: ComposeService) {
@@ -961,7 +900,7 @@
 	}
 
 	function serviceDisplayChipClass(project: ComposeProject | undefined, service: ComposeService) {
-		if (isServiceRestarting(service, busyAction)) {
+		if (isServiceRestarting(service, activeActions)) {
 			return 'state-chip-exited';
 		}
 
@@ -998,36 +937,10 @@
 		);
 
 		hydrateBuilds(nextBuilds);
-
-		if (status !== 'running') {
-			setActiveBuildTarget(buildId, null);
-		}
-	}
-
-	function clearActiveTargets(projectId: string, serviceId?: string) {
-		for (const [buildId, target] of Object.entries(activeBuildTargets)) {
-			if (target.projectId !== projectId) {
-				continue;
-			}
-
-			if (serviceId && target.serviceId !== serviceId) {
-				continue;
-			}
-
-			// Container refreshes and stop actions do not determine a build's result.
-			setActiveBuildTarget(buildId, null);
-		}
 	}
 
 	function ensureWatchBuild(project: Pick<ComposeProject, 'id' | 'name'>, service?: ComposeService) {
 		const existing = currentWatchBuild(project.id);
-		const target = {
-			projectId: project.id,
-			...(service ? { serviceId: service.id } : {})
-		};
-
-		watchBuildTargets.set(project.id, target);
-
 		if (existing) {
 			const nextBuild = {
 				...existing,
@@ -1037,7 +950,6 @@
 				targetName: service?.serviceName ?? existing.targetName ?? project.name
 			};
 			upsertLocalBuild(nextBuild);
-			setActiveBuildTarget(existing.id, target);
 			return nextBuild;
 		}
 
@@ -1057,10 +969,6 @@
 
 		upsertLocalBuild(build);
 		watchBuildIds.set(project.id, build.id);
-		setActiveBuildTarget(build.id, {
-			projectId: project.id,
-			...(service ? { serviceId: service.id } : {})
-		});
 
 		return build;
 	}
@@ -1398,18 +1306,10 @@
 		if (!buildId) {
 			return;
 		}
-
-		if (status === 'running') {
-			setActiveBuildTarget(buildId, watchBuildTargets.get(projectId) ?? { projectId });
-		} else {
-			setActiveBuildTarget(buildId, null);
-		}
-
 		setBuildStatus(buildId, status);
 
 		if (options?.clear) {
 			watchBuildIds.delete(projectId);
-			watchBuildTargets.delete(projectId);
 		}
 	}
 
@@ -1467,10 +1367,6 @@
 					finishedAt: existing.finishedAt
 				};
 			upsertLocalBuild(build);
-			setActiveBuildTarget(startResult.buildId, {
-				projectId: project.id,
-				...(service ? { serviceId: service.id } : {})
-			});
 			subscribeToBuild(build);
 		}
 
@@ -1499,17 +1395,6 @@
 			hydrateBuilds(nextBuilds);
 			buildHistoryError = '';
 			for (const build of nextBuilds) {
-				if (build.status === 'running') {
-					const project = visibleProjects.find(
-						(entry) => entry.id === build.projectId || entry.name === build.projectName
-					);
-					setActiveBuildTarget(
-						build.id,
-						activeBuildTargets[build.id] ?? { projectId: project?.id ?? build.projectId }
-					);
-				} else {
-					setActiveBuildTarget(build.id, null);
-				}
 				if (build.streamUrl && !capturedBuilds.has(build.id)) subscribeToBuild(build);
 			}
 			return nextBuilds;
@@ -1774,7 +1659,7 @@
 			}
 
 			void refreshSystemResources();
-			if (refreshing || busyAction) return;
+			if (refreshing) return;
 			void refresh({ silent: true });
 			void refreshSelectedResources();
 		};
@@ -1783,7 +1668,7 @@
 
 		return () => {
 			disposed = true;
-			actionQueue.close();
+			actionTracker.close();
 			document.removeEventListener('visibilitychange', poll);
 			window.removeEventListener('hashchange', handleHashChange);
 			window.clearInterval(intervalId);
@@ -2844,8 +2729,7 @@
 		const shouldStop = service
 			? ['running', 'paused', 'restarting'].includes(service.state)
 			: projectCanStop(project);
-		if (shouldStop && busyAction) return;
-		const release = await actionQueue.acquire({
+		const release = actionTracker.acquire({
 			kind: shouldStop ? 'stop' : 'start',
 			projectId: project.id,
 			serviceId: service?.id
@@ -2949,7 +2833,7 @@
 		}
 
 		const serviceNames = service ? [service.serviceName] : undefined;
-		const release = await actionQueue.acquire({
+		const release = actionTracker.acquire({
 			kind: 'up-no-build',
 			projectId: project.id,
 			serviceId: service?.id
@@ -2993,14 +2877,14 @@
 	}
 
 	async function handleRestart(project = selectedProject, service?: ComposeService) {
-		if (!project || !uiState || busyAction) {
+		if (!project || !uiState || actionPending(project, service)) {
 			return;
 		}
 
 		const serviceNames = service ? [service.serviceName] : undefined;
 		const targetName = service?.serviceName ?? project.name;
 		const keepWatching = projectWatchActive(project);
-		const release = await actionQueue.acquire({
+		const release = actionTracker.acquire({
 			kind: 'restart',
 			projectId: project.id,
 			serviceId: service?.id
@@ -3040,7 +2924,7 @@
 	}
 
 	async function handleRemove(project = selectedProject, service?: ComposeService) {
-		if (!project || !uiState || busyAction) {
+		if (!project || !uiState || actionPending(project, service)) {
 			return;
 		}
 
@@ -3054,7 +2938,7 @@
 		}
 
 		const serviceNames = service ? [service.serviceName] : undefined;
-		const release = await actionQueue.acquire({
+		const release = actionTracker.acquire({
 			kind: 'remove',
 			projectId: project.id,
 			serviceId: service?.id
@@ -3091,9 +2975,8 @@
 		}
 
 		const isUnpause = service ? service.state === 'paused' : isProjectFullyPaused(project);
-		if (!isUnpause && busyAction) return;
 		const serviceNames = service ? [service.serviceName] : undefined;
-		const release = await actionQueue.acquire({
+		const release = actionTracker.acquire({
 			kind: isUnpause ? 'unpause' : 'pause',
 			projectId: project.id,
 			serviceId: service?.id
@@ -3146,13 +3029,13 @@
 	}
 
 	async function handleWatchingToggle(project = selectedProject, service?: ComposeService) {
-		if (!project || !uiState || busyAction) {
+		if (!project || !uiState || actionPending(project, service)) {
 			return;
 		}
 
 		const nextWatching = !project.watching;
 		const serviceNames = service ? [service.serviceName] : undefined;
-		const release = await actionQueue.acquire({
+		const release = actionTracker.acquire({
 			kind: 'watching',
 			projectId: project.id,
 			serviceId: service?.id
@@ -3190,7 +3073,6 @@
 				setWatchBuildStatus(project.id, 'succeeded');
 			}
 
-			clearActiveTargets(project.id, service?.id);
 			setConnectionState(
 				'connected',
 				`${nextWatching ? 'Watching' : 'Stopped watching'} ${service?.serviceName ?? project.name}.`
@@ -3475,7 +3357,7 @@
 					type="button"
 					aria-label="Refresh projects"
 					onmousedown={handleManualRefresh}
-					disabled={refreshing || busyAction !== null}
+					disabled={refreshing}
 				>
 					<Icon name="refresh" size={13} spinning={refreshing} />
 				</button>
@@ -3564,12 +3446,12 @@
 												if (!isPrimaryMouse(event)) return;
 												handleStartStopToggle(project);
 											}}
-											disabled={projectCanStop(project) ? busyAction !== null : startActionDisabled(project)}
+											disabled={projectCanStop(project) ? actionPending(project) : startActionDisabled(project)}
 										>
 											<Icon
-												name={busyAction === `stop:${project.id}:project` ? 'refresh' : projectCanStop(project) ? 'stop' : 'play'}
+												name={actionActive('stop', project) ? 'refresh' : projectCanStop(project) ? 'stop' : 'play'}
 												size={13}
-												spinning={busyAction === `stop:${project.id}:project`}
+												spinning={actionActive('stop', project)}
 											/>
 										</button>
 									</span>
@@ -3588,12 +3470,12 @@
 												if (!isPrimaryMouse(event)) return;
 												handleRestart(project);
 											}}
-											disabled={busyAction !== null}
+											disabled={actionPending(project)}
 										>
 											<Icon
 												name="refresh"
 												size={13}
-												spinning={busyAction === `restart:${project.id}:project`}
+												spinning={actionActive('restart', project)}
 											/>
 										</button>
 									</span>
@@ -3631,12 +3513,12 @@
 											if (!isPrimaryMouse(event)) return;
 											handleWatchingToggle(project);
 										}}
-										disabled={busyAction !== null}
+										disabled={actionPending(project)}
 									>
 										<Icon
-											name={busyAction === `watching:${project.id}:project` ? 'refresh' : project.watching ? 'eye-off' : 'eye'}
+											name={actionActive('watching', project) ? 'refresh' : project.watching ? 'eye-off' : 'eye'}
 											size={13}
-											spinning={busyAction === `watching:${project.id}:project`}
+											spinning={actionActive('watching', project)}
 										/>
 									</button>
 								</span>
@@ -3648,8 +3530,7 @@
 								{project}
 								shellConfig={uiState}
 								{selectedContainerId}
-								{busyAction}
-								{queuedActions}
+								{activeActions}
 								{builds}
 								sortBy={uiState?.sortBy ?? 'status'}
 								refreshEpoch={serviceQueryEpoch}
@@ -3863,8 +3744,8 @@
 				{#if selectedProject && selectedServices.length}
 					<div class="compact-list">
 						{#each selectedServices as service (service.id)}
-							{@const errorsOnly = serviceLogErrorFilters[serviceLogKey(selectedProject.id, service.id)] ?? false}
 							{@const errorCount = serviceLogErrorCount(selectedProject, service)}
+							{@const errorsOnly = errorCount > 0 && (serviceLogErrorFilters[serviceLogKey(selectedProject.id, service.id)] ?? false)}
 							<div class="service-log-item">
 								<div class="service-log-header">
 									<button
@@ -3897,24 +3778,24 @@
 									</button>
 
 									<div class="service-overview-actions">
-										<button
-											class="log-error-filter"
-											class:has-errors={errorCount > 0}
-											type="button"
-											aria-label={`Filter ${service.serviceName} logs to errors`}
-											aria-pressed={errorsOnly}
-											title={errorsOnly ? 'Show all log lines' : 'Show only errors'}
-											onclick={() => toggleServiceLogErrors(selectedProject, service)}
-										>
-											<Icon name="warning" size={14} />
-											{#if errorCount}<span>{errorCount}</span>{/if}
-										</button>
+										{#if errorCount > 0}
+											<button
+												class="log-error-filter has-errors"
+												type="button"
+												aria-label={`Filter ${service.serviceName} logs to errors`}
+												aria-pressed={errorsOnly}
+												title={errorsOnly ? 'Show all log lines' : 'Show only errors'}
+												onclick={() => toggleServiceLogErrors(selectedProject, service)}
+											>
+												<Icon name="warning" size={14} />
+												<span>{errorCount}</span>
+											</button>
+										{/if}
 										<ShellLink
 											config={uiState}
 											target={containerShellTarget(selectedProject, service)}
 											label={`${shellActionLabel(service.state)} for ${service.serviceName}`}
 											compact
-											disabled={busyAction !== null}
 										/>
 										{#if service.state === 'running'}
 											<a
@@ -4139,8 +4020,8 @@
 					<div class="build-list">
 						{#each selectedProjectBuilds as build (build.id)}
 							{@const entries = buildStreamEntriesForBuild(build.id)}
-							{@const errorsOnly = buildErrorFilters[build.id] ?? false}
 							{@const errorEntries = entries.filter((entry) => isErrorLogLine(entry.stream, entry.message))}
+							{@const errorsOnly = errorEntries.length > 0 && (buildErrorFilters[build.id] ?? false)}
 							{@const visibleEntries = errorsOnly ? errorEntries : entries}
 							<div class="build-item" id={`build-${build.id}`}>
 								<div class="build-log-header">
@@ -4168,18 +4049,19 @@
 											<span>{formatBuildTime(build.finishedAt ?? build.startedAt)}</span>
 										</span>
 									</button>
-									<button
-										class="log-error-filter"
-										class:has-errors={errorEntries.length > 0 || build.status === 'failed'}
-										type="button"
-										aria-label={`Filter ${buildRowTitle(build)} output to errors`}
-										aria-pressed={errorsOnly}
-										title={errorsOnly ? 'Show all build lines' : 'Show only errors'}
-										onclick={() => toggleBuildErrors(build.id)}
-									>
-										<Icon name="warning" size={14} />
-										{#if errorEntries.length}<span>{errorEntries.length}</span>{/if}
-									</button>
+									{#if errorEntries.length > 0}
+										<button
+											class="log-error-filter has-errors"
+											type="button"
+											aria-label={`Filter ${buildRowTitle(build)} output to errors`}
+											aria-pressed={errorsOnly}
+											title={errorsOnly ? 'Show all build lines' : 'Show only errors'}
+											onclick={() => toggleBuildErrors(build.id)}
+										>
+											<Icon name="warning" size={14} />
+											<span>{errorEntries.length}</span>
+										</button>
+									{/if}
 								</div>
 
 								{#if buildPanelOpen(build.id)}

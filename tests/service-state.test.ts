@@ -78,20 +78,26 @@ test('previous failures stop contributing while those containers are transitioni
 test('retrying a previously failed container clears its contribution until the retry ends', () => {
 	const worker = { ...failed, projectId: 'demo', projectName: 'demo', serviceName: 'worker' };
 	const sibling = { ...worker, id: 'scheduler', serviceName: 'scheduler' };
-	const hasFailure = (services: (typeof worker | typeof sibling)[], busyAction: string | null) =>
+	const hasFailure = (
+		services: (typeof worker | typeof sibling)[],
+		activeActions: import('../src/lib/central/action-state.ts').ServiceAction[]
+	) =>
 		hasFailedServicesOutsideTransition(
 			services,
 			services
-				.filter((service) => servicePendingStatus(service, [], busyAction))
+				.filter((service) => servicePendingStatus(service, [], activeActions))
 				.map((service) => service.id)
 		);
 
 	for (const kind of ['start', 'up-no-build', 'restart']) {
-		assert.equal(hasFailure([worker], `${kind}:demo:worker`), false);
-		assert.equal(hasFailure([worker, sibling], `${kind}:demo:project`), false);
-		assert.equal(hasFailure([worker, sibling], `${kind}:demo:worker`), true);
+		assert.equal(hasFailure([worker], [{ kind, projectId: 'demo', serviceId: 'worker' }]), false);
+		assert.equal(hasFailure([worker, sibling], [{ kind, projectId: 'demo' }]), false);
+		assert.equal(
+			hasFailure([worker, sibling], [{ kind, projectId: 'demo', serviceId: 'worker' }]),
+			true
+		);
 	}
-	assert.equal(hasFailure([worker], null), true);
+	assert.equal(hasFailure([worker], []), true);
 });
 
 test('successful and explicitly stopped containers use the neutral stopped state', () => {

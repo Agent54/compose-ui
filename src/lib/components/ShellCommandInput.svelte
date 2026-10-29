@@ -5,6 +5,7 @@
 	import { canBrowseHistory, highlightShell } from '$lib/shell/command';
 	import { CommandHistory, type CommandEntry } from '$lib/shell/history';
 	import { CommandPins, type PinnedCommand } from '$lib/shell/pins';
+	import { press, pressMenu } from '$lib/shell/press';
 
 	let {
 		draft = $bindable(''),
@@ -98,9 +99,6 @@
 		} catch {
 			pinError = 'Browser storage is unavailable; commands cannot be pinned.';
 		}
-		const outside = (event: PointerEvent) => {
-			if (!node.contains(event.target as Node)) closeHistory();
-		};
 		const panelKeyboard = (event: KeyboardEvent) => {
 			if (!historyOpen || event.defaultPrevented || event.isComposing) return;
 			if (
@@ -125,14 +123,12 @@
 		const storageChanged = (event: StorageEvent) => {
 			if (event.key === null || event.key === pinStore?.key) readPins();
 		};
-		document.addEventListener('pointerdown', outside);
 		document.addEventListener('keydown', panelKeyboard);
 		window.addEventListener('storage', storageChanged);
 		return () => {
 			disposed = true;
 			++navigation;
 			history?.close();
-			document.removeEventListener('pointerdown', outside);
 			document.removeEventListener('keydown', panelKeyboard);
 			window.removeEventListener('storage', storageChanged);
 		};
@@ -318,10 +314,11 @@
 		<button
 			type="button"
 			class="load-command"
+			data-menu-item
 			aria-label={`Load command: ${entry.text}`}
 			aria-current={selectedKey === rowKey(entry) ? 'true' : undefined}
 			title="Load command into editor"
-			onclick={() => chooseCommand(entry)}
+			{@attach press(() => chooseCommand(entry))}
 		>
 			<code>{entry.text}</code>
 			<time datetime={usedAt.toISOString()} title={`Used ${usedAt.toLocaleString()}`}
@@ -332,13 +329,14 @@
 		<button
 			type="button"
 			class="pin-command"
+			data-menu-item
 			aria-label={`${pinned ? 'Unpin' : 'Pin'} command: ${entry.text}`}
 			aria-pressed={pinned}
 			data-pin-command={entry.text}
 			title={pinned ? 'Unpin command' : 'Pin command'}
-			onclick={(event) => {
-				void togglePin(entry, event.currentTarget);
-			}}><Icon name="pin" size={14} stroke={1.7} /></button
+			{@attach press((button) => {
+				void togglePin(entry, button);
+			})}><Icon name="pin" size={14} stroke={1.7} /></button
 		>
 	</li>
 {/snippet}
@@ -351,6 +349,7 @@
 			class="history"
 			bind:open={historyOpen}
 			{@attach mountHistory}
+			{@attach pressMenu({ navigate: false })}
 			ontoggle={async (event) => {
 				if (event.currentTarget.open) {
 					readPins();
@@ -380,11 +379,12 @@
 				{/if}
 				{#if more}<button
 						class="load-older"
+						data-menu-item
 						type="button"
 						disabled={loading}
-						onclick={() => {
+						{@attach press(() => {
 							void loadHistory(true);
-						}}>{loading ? 'Loading…' : 'Load older commands'}</button
+						})}>{loading ? 'Loading…' : 'Load older commands'}</button
 					>{/if}
 				<ul
 					class="recent"
@@ -563,21 +563,22 @@
 		color: var(--shell-text);
 	}
 	[data-token='command'] {
-		color: var(--shell-text);
-		font-weight: 600;
+		color: var(--shell-syntax-command);
 	}
-	[data-token='keyword'],
+	[data-token='keyword'] {
+		color: var(--shell-syntax-keyword);
+	}
 	[data-token='variable'] {
-		color: var(--shell-accent);
+		color: var(--shell-syntax-variable);
 	}
 	[data-token='string'] {
-		color: #b4bcc4;
+		color: var(--shell-syntax-string);
 	}
 	[data-token='operator'] {
-		color: var(--shell-muted);
+		color: var(--shell-syntax-operator);
 	}
 	[data-token='option'] {
-		color: var(--shell-text);
+		color: var(--shell-syntax-option);
 	}
 	[data-token='comment'] {
 		color: var(--shell-muted);
@@ -683,7 +684,8 @@
 		border-radius: 6px;
 	}
 	.command-row:hover,
-	.command-row:focus-within {
+	.command-row:focus-within,
+	.command-row:has(:global([data-press-active])) {
 		background: var(--shell-hover);
 	}
 	.command-row.current {
@@ -722,14 +724,17 @@
 	}
 	.command-row:hover .pin-command,
 	.command-row:focus-within .pin-command,
+	.command-row:has(:global([data-press-active])) .pin-command,
 	.pin-command[aria-pressed='true'] {
 		opacity: 1;
 	}
 	.pin-command[aria-pressed='true'],
-	.pin-command:hover {
+	.pin-command:hover,
+	.pin-command:global([data-press-active]) {
 		color: var(--shell-accent);
 	}
-	.pin-command:hover {
+	.pin-command:hover,
+	.pin-command:global([data-press-active]) {
 		background: var(--shell-hover);
 	}
 	code {
@@ -772,6 +777,9 @@
 		border-radius: 0.3rem;
 		background: var(--shell-hover);
 		color: var(--shell-accent);
+	}
+	.load-older:global([data-press-active]) {
+		background: var(--shell-active);
 	}
 	@media (max-width: 640px) {
 		.command-editor {

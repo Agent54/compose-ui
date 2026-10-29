@@ -2,6 +2,7 @@
 	import Icon from './Icon.svelte';
 	import ShellAction from './ShellAction.svelte';
 	import type { ShellSession } from '$lib/shell/session';
+	import { press, pressMenu } from '$lib/shell/press';
 	let {
 		sessions,
 		activeId,
@@ -20,32 +21,15 @@
 		onrefresh: () => void;
 	} = $props();
 	const active = $derived(sessions.find((session) => session.id === activeId));
-	function dismiss(element: HTMLDetailsElement) {
-		const outside = (event: PointerEvent) => {
-			if (event.target instanceof Node && !element.contains(event.target)) element.open = false;
-		};
-		const escape = (event: KeyboardEvent) => {
-			if (event.key === 'Escape' && element.open) {
-				element.open = false;
-				element.querySelector('summary')?.focus();
-			}
-		};
-		window.addEventListener('pointerdown', outside);
-		window.addEventListener('keydown', escape);
-		return () => {
-			window.removeEventListener('pointerdown', outside);
-			window.removeEventListener('keydown', escape);
-		};
-	}
-	function choose(event: MouseEvent, action: () => void) {
-		(event.currentTarget as HTMLButtonElement).closest('details')!.open = false;
+	function choose(button: HTMLButtonElement, action: () => void) {
+		button.closest('details')!.open = false;
 		action();
 	}
 </script>
 
 <details
 	class="sessions"
-	{@attach dismiss}
+	{@attach pressMenu()}
 	ontoggle={(event) => {
 		if (event.currentTarget.open) onrefresh();
 	}}
@@ -80,9 +64,10 @@
 					<button
 						type="button"
 						class="select-session"
+						data-menu-item
 						disabled={busy || session.state === 'exited'}
 						aria-current={session.id === activeId ? 'true' : undefined}
-						onclick={(event) => choose(event, () => onselect(session.id))}
+						{@attach press((button) => choose(button, () => onselect(session.id)))}
 					>
 						<span class="session-heading"
 							><strong
@@ -106,10 +91,12 @@
 					<button
 						type="button"
 						class="close-session"
+						data-menu-item
 						disabled={busy}
 						aria-label={`Close session ${session.name}`}
 						title={`Terminate and delete ${session.name}`}
-						onclick={() => onclose(session.id)}><Icon name="close" size={14} stroke={1.7} /></button
+						{@attach press(() => onclose(session.id))}
+						><Icon name="close" size={14} stroke={1.7} /></button
 					>
 				</li>
 			{:else}<li class="empty">No sessions yet</li>{/each}
@@ -117,8 +104,9 @@
 		<button
 			type="button"
 			class="new-session"
+			data-menu-item
 			disabled={busy}
-			onclick={(event) => choose(event, onnew)}><span>+</span>New session</button
+			{@attach press((button) => choose(button, onnew))}><span>+</span>New session</button
 		>
 	</div>
 </details>
@@ -135,7 +123,8 @@
 		gap: 0.5rem;
 		min-height: 30px;
 		padding: 0.25rem 0.5rem;
-		border: 1px solid transparent;
+		border: 1px solid var(--shell-border-strong);
+		background: var(--shell-control);
 		border-radius: 6px;
 		cursor: pointer;
 		list-style: none;
@@ -145,7 +134,7 @@
 	}
 	summary:hover,
 	.sessions[open] summary {
-		border-color: var(--shell-border);
+		border-color: var(--shell-focus);
 		background: var(--shell-hover);
 	}
 	.session-current {
@@ -211,7 +200,8 @@
 		flex: none;
 	}
 	li:hover,
-	li:focus-within {
+	li:focus-within,
+	li:has(:global([data-press-active])) {
 		background: var(--shell-hover);
 	}
 	li.current {
@@ -270,10 +260,12 @@
 		color: var(--shell-muted);
 	}
 	li:hover .close-session,
-	li:focus-within .close-session {
+	li:focus-within .close-session,
+	li:has(:global([data-press-active])) .close-session {
 		opacity: 1;
 	}
-	.close-session:hover:enabled {
+	.close-session:hover:enabled,
+	.close-session:global([data-press-active]) {
 		background: color-mix(in srgb, var(--shell-danger) 12%, transparent);
 		color: var(--shell-danger);
 	}
@@ -288,7 +280,8 @@
 		color: var(--shell-accent);
 		font-size: 12px;
 	}
-	.new-session:hover:enabled {
+	.new-session:hover:enabled,
+	.new-session:global([data-press-active]) {
 		background: var(--shell-hover);
 	}
 	.new-session span {

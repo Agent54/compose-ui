@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import Icon from './Icon.svelte';
+	import { press } from '$lib/shell/press';
 	let {
 		label,
 		description = '',
@@ -42,7 +43,7 @@
 		aria-label={label}
 		aria-describedby={uid}
 		{disabled}
-		{onclick}
+		{@attach press(onclick)}
 		onpointerenter={() => {
 			dismissed = false;
 		}}

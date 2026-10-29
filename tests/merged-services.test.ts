@@ -58,11 +58,16 @@ test('a parent start animates every merged child and a child start stays scoped'
 	const sibling = { ...service, id: 'darc:main', serviceName: 'darc' };
 	for (const kind of ['start', 'up-no-build', 'watching', 'stop', 'remove', 'restart']) {
 		for (const child of [service, sibling]) {
-			assert.ok(servicePendingStatus(child, [], `${kind}:darc:project`));
+			assert.ok(servicePendingStatus(child, [], [{ kind, projectId: 'darc' }]));
 		}
-		assert.ok(servicePendingStatus(service, [], `${kind}:darc:${service.id}`));
-		assert.equal(servicePendingStatus(sibling, [], `${kind}:darc:${service.id}`), '');
-		assert.equal(servicePendingStatus(service, [], `${kind}:elsewhere:project`), '');
+		assert.ok(
+			servicePendingStatus(service, [], [{ kind, projectId: 'darc', serviceId: service.id }])
+		);
+		assert.equal(
+			servicePendingStatus(sibling, [], [{ kind, projectId: 'darc', serviceId: service.id }]),
+			''
+		);
+		assert.equal(servicePendingStatus(service, [], [{ kind, projectId: 'elsewhere' }]), '');
 	}
 });
 

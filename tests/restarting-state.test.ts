@@ -48,7 +48,9 @@ test('restarting projects keep the running sort priority with or without running
 test('container restart sort priority stays active through backend and local restart states', () => {
 	for (const state of ['running', 'restarting', 'exited', 'created'] as const) {
 		const restarting = { ...service, state };
-		const sortState = isServiceRestarting(restarting, `restart:demo:${service.id}`)
+		const sortState = isServiceRestarting(restarting, [
+			{ kind: 'restart', projectId: 'demo', serviceId: service.id }
+		])
 			? 'restarting'
 			: restarting.state;
 		assert.equal(serviceStateRank(sortState), serviceStateRank('running'));
@@ -118,13 +120,21 @@ test('project summaries reflect restart counts even without loaded children', ()
 
 test('local service and project restarts propagate without marking unrelated nodes', () => {
 	const runningService = { ...service, state: 'running' as const };
-	const serviceAction = `restart:demo:${service.id}`;
+	const serviceAction = [{ kind: 'restart', projectId: 'demo', serviceId: service.id }];
 	assert.equal(isServiceRestarting(runningService, serviceAction), true);
 	assert.equal(isProjectRestarting(project, [], serviceAction), true);
-	assert.equal(isServiceRestarting(runningService, 'restart:demo:project'), true);
-	assert.equal(isServiceRestarting(runningService, 'restart:demo:other-service'), false);
-	assert.equal(isProjectRestarting(project, [], 'restart:demo-other:project'), false);
-	assert.equal(isProjectRestarting(project, [], 'start:demo:project'), false);
+	assert.equal(isServiceRestarting(runningService, [{ kind: 'restart', projectId: 'demo' }]), true);
+	assert.equal(
+		isServiceRestarting(runningService, [
+			{ kind: 'restart', projectId: 'demo', serviceId: 'other-service' }
+		]),
+		false
+	);
+	assert.equal(
+		isProjectRestarting(project, [], [{ kind: 'restart', projectId: 'demo-other' }]),
+		false
+	);
+	assert.equal(isProjectRestarting(project, [], [{ kind: 'start', projectId: 'demo' }]), false);
 	assert.equal(isServiceRestarting(runningService), false);
 	assert.equal(isServiceRestarting(service), true);
 });

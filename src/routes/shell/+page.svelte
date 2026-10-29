@@ -8,6 +8,7 @@
 	import { commandHistoryScope } from '$lib/shell/history';
 	import { parseShellLaunch, type ShellLaunch } from '$lib/shell/launch';
 	import { shellStyles } from '$lib/shell/theme';
+	import { press } from '$lib/shell/press';
 	import {
 		createShellTerminal,
 		type ShellTerminal,
@@ -249,7 +250,7 @@
 			<span>{status.message}</span>
 			{#if status.phase === 'error' && launch && !controller}<button
 					type="button"
-					onclick={() => window.location.reload()}>Reload</button
+					{@attach press(() => window.location.reload())}>Reload</button
 				>{/if}
 		</div>
 	{/if}
@@ -289,10 +290,11 @@
 					aria-label="Previous match"
 					title="Previous match (Shift+Enter)"
 					disabled={!query || !controller}
-					onclick={() => find(true)}>↑</button
+					{@attach press(() => find(true))}>↑</button
 				>
 				<button
 					type="submit"
+					{@attach press()}
 					aria-label="Next match"
 					title="Next match (Enter)"
 					disabled={!query || !controller}>↓</button
@@ -301,7 +303,7 @@
 					type="button"
 					aria-label="Close search"
 					title="Close search (Esc)"
-					onclick={closeSearch}><Icon name="close" size={14} /></button
+					{@attach press(closeSearch)}><Icon name="close" size={14} /></button
 				>
 			</form>
 		{/if}
