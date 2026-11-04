@@ -59,8 +59,11 @@ function pendingStatus(
 }
 
 export function projectStateRank(
-	state: ComposeProject['state'] | ComposeService['state'] | 'mixed'
+	state: ComposeProject['state'] | ComposeService['state'] | 'mixed',
+	pending: ReturnType<typeof pendingStatus> = ''
 ) {
+	// Pending work has the same active priority as running, even before creation.
+	if (pending) return 0;
 	if (state === 'running' || state === 'restarting') return 0;
 	if (state === 'paused') return 1;
 	if (state === 'mixed') return 2;
@@ -70,7 +73,11 @@ export function projectStateRank(
 	return 6;
 }
 
-export function serviceStateRank(state: ComposeService['state']) {
+export function serviceStateRank(
+	state: ComposeService['state'],
+	pending: ReturnType<typeof pendingStatus> = ''
+) {
+	if (pending) return 0;
 	if (state === 'running' || state === 'restarting') return 0;
 	if (state === 'paused') return 1;
 	if (state === 'exited') return 2;

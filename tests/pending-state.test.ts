@@ -1,7 +1,12 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { projectPendingStatus, servicePendingStatus } from '../src/lib/central/service-state.ts';
+import {
+	projectPendingStatus,
+	projectStateRank,
+	servicePendingStatus,
+	serviceStateRank
+} from '../src/lib/central/service-state.ts';
 import type { ServiceAction } from '../src/lib/central/action-state.ts';
 import type { ComposeBuild } from '../src/lib/central/types.ts';
 
@@ -108,4 +113,92 @@ test('a pending child still propagates when discovery and build project names te
 	assert.equal(servicePendingStatus(child, [polledBuild]), 'building');
 	assert.equal(projectPendingStatus(project, [child, worker], [polledBuild]), 'building');
 	assert.equal(projectPendingStatus(unrelated, [child, worker], [polledBuild]), '');
+});
+
+test('starting and building sort before inactive rows throughout request and build handoff', () => {
+	const uncreatedProject = { ...project, state: 'uncreated' as const, statusLabel: 'uncreated(2)' };
+	const uncreatedWeb = { ...web, state: 'uncreated' as const };
+	const uncreatedWorker = { ...worker, state: 'uncreated' as const };
+	const children = [uncreatedWeb, uncreatedWorker];
+	const snapshots: Array<{
+		actions: ServiceAction[];
+		builds: ComposeBuild[];
+		expected: string;
+	}> = [
+		{
+			actions: [{ kind: 'start', projectId: project.id, serviceId: web.id }],
+			builds: [],
+			expected: 'starting'
+		},
+		{
+			actions: [{ kind: 'start', projectId: project.id, serviceId: web.id }],
+			builds: [build],
+			expected: 'starting'
+		},
+		{ actions: [], builds: [build], expected: 'building' }
+	];
+
+	for (const { actions, builds, expected } of snapshots) {
+		const childStatus = servicePendingStatus(uncreatedWeb, builds, actions);
+		assert.equal(childStatus, expected);
+		assert.equal(servicePendingStatus(uncreatedWorker, builds, actions), '');
+		const childRank = serviceStateRank(uncreatedWeb.state, childStatus);
+		assert.equal(childRank, serviceStateRank('running'));
+		for (const state of ['paused', 'exited', 'created', 'unknown', 'uncreated'] as const) {
+			assert.ok(childRank < serviceStateRank(state), `${expected} before ${state}`);
+		}
+		for (const services of [children, []]) {
+			const parentStatus = projectPendingStatus(uncreatedProject, services, builds, actions);
+			assert.equal(parentStatus, expected);
+			const parentRank = projectStateRank(uncreatedProject.state, parentStatus);
+			assert.equal(parentRank, projectStateRank('running'));
+			for (const state of [
+				'paused',
+				'mixed',
+				'exited',
+				'stopped',
+				'created',
+				'unknown',
+				'uncreated'
+			] as const) {
+				assert.ok(parentRank < projectStateRank(state), `${expected} parent before ${state}`);
+			}
+		}
+	}
+
+	for (const status of ['succeeded', 'failed'] as const) {
+		const builds = [{ ...build, status }];
+		assert.equal(
+			serviceStateRank(uncreatedWeb.state, servicePendingStatus(uncreatedWeb, builds)),
+			serviceStateRank('uncreated')
+		);
+		assert.equal(
+			projectStateRank(
+				uncreatedProject.state,
+				projectPendingStatus(uncreatedProject, children, builds)
+			),
+			projectStateRank('uncreated')
+		);
+	}
+});
+
+test('all displayed pending operations receive the same active sorting priority', () => {
+	for (const kind of [
+		'start',
+		'up-no-build',
+		'unpause',
+		'restart',
+		'stop',
+		'remove',
+		'pause',
+		'watching'
+	]) {
+		const actions = [{ kind, projectId: project.id }];
+		const parentStatus = projectPendingStatus(project, [], [], actions);
+		const childStatus = servicePendingStatus(web, [], actions);
+		assert.ok(parentStatus, kind);
+		assert.equal(parentStatus, childStatus);
+		assert.equal(projectStateRank('uncreated', parentStatus), projectStateRank('running'), kind);
+		assert.equal(serviceStateRank('uncreated', childStatus), serviceStateRank('running'), kind);
+	}
 });

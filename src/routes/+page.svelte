@@ -186,6 +186,25 @@
 	let searchExpanded = $state(false);
 	let searchInput: HTMLInputElement | null = null;
 	let dragSidebarWidth = $state<number | null>(null);
+	let mainViewOpen = $state(browser && Boolean(parseSelectionHash(window.location.hash)));
+	let mainBackButton: HTMLButtonElement | undefined;
+	let sidebarReturnFocus: HTMLElement | null = null;
+
+	async function openMainView(projectView = true) {
+		if (!window.matchMedia('(max-width: 700px)').matches || mainViewOpen) return;
+		sidebarReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		mainViewOpen = projectView;
+		await tick();
+		mainBackButton?.focus({ preventScroll: true });
+	}
+
+	async function backToProjects() {
+		mainViewOpen = false;
+		contextMenu = null;
+		if (diskPageOpen) closeDiskUsage();
+		await tick();
+		if (sidebarReturnFocus?.isConnected) sidebarReturnFocus.focus({ preventScroll: true });
+	}
 	let buildStreamEntries = $state<BuildStreamEntry[]>([]);
 	let serviceLogEntries = $state<Record<string, ServiceLogEntry[]>>({});
 	let serviceLogStreamErrors = $state<Record<string, string>>({});
@@ -262,7 +281,8 @@
 		const rightState = projectAggregateState(right);
 
 		return (
-			projectStateRank(leftState) - projectStateRank(rightState) ||
+			projectStateRank(leftState, projectPendingStatusLabel(left)) -
+				projectStateRank(rightState, projectPendingStatusLabel(right)) ||
 			right.containerCount - left.containerCount ||
 			left.name.localeCompare(right.name)
 		);
@@ -353,6 +373,7 @@
 	let diskPageOpen = $state(browser && window.location.hash === '#disk-usage');
 	function openDiskUsage() {
 		if (diskPageOpen) return;
+		void openMainView(false);
 		diskPageOpen = true;
 		window.history.pushState(null, '', '#disk-usage');
 	}
@@ -1636,6 +1657,7 @@
 		const handleHashChange = () => {
 			diskPageOpen = window.location.hash === '#disk-usage';
 			pendingHashSelection = parseSelectionHash(window.location.hash);
+			mainViewOpen = Boolean(pendingHashSelection);
 		};
 
 		handleHashChange();
@@ -3093,12 +3115,14 @@
 		diskPageOpen = false;
 		contextMenu = null;
 		selectProject(projectId);
+		void openMainView();
 	}
 
 	function handleContainerSelect(projectId: string, serviceId: string) {
 		diskPageOpen = false;
 		contextMenu = null;
 		selectContainer(projectId, serviceId);
+		void openMainView();
 	}
 
 	function isPrimaryMouse(event: MouseEvent) {
@@ -3306,7 +3330,7 @@
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
-<div class="workspace" class:disk-page-open={diskPageOpen} style={`--sidebar-width:${sidebarWidth}px;`}>
+<div class="workspace" class:main-view-open={mainViewOpen || diskPageOpen} style={`--sidebar-width:${sidebarWidth}px;`}>
 	<aside class="sidebar">
 		<div class="sidebar-controls">
 			<label class="sort-menu">
@@ -3398,7 +3422,7 @@
 							<button
 								class="project-button row-tooltip-trigger"
 								type="button"
-								onmousedown={(event) => {
+								onclick={(event) => {
 									if (!isPrimaryMouse(event)) return;
 									handleProjectSelect(project.id);
 								}}
@@ -3560,6 +3584,16 @@
 	<main class="panel">
 		<header class="panel-header">
 			<div class="panel-heading">
+				<button
+					bind:this={mainBackButton}
+					class="main-back-button"
+					type="button"
+					aria-label="Back to projects"
+					onclick={() => void backToProjects()}
+				>
+					<span class="back-chevron"><Icon name="chevron" size={16} /></span>
+					<span>Back</span>
+				</button>
 				<h2>{diskPageOpen ? 'VM storage' : selectedProject?.name ?? 'Compose Projects'}</h2>
 			</div>
 			<div class="resource-strip" aria-label="Resource usage">
@@ -4188,6 +4222,7 @@
 		position: relative;
 		display: grid;
 		height: 100vh;
+		height: 100dvh;
 		min-height: 0;
 		grid-template-columns: var(--sidebar-width, 22rem) 0.36rem minmax(0, 1fr);
 		background: var(--app-bg);
@@ -4972,6 +5007,34 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.3rem;
+	}
+
+	.main-back-button {
+		display: none;
+		align-items: center;
+		gap: 0.25rem;
+		min-height: 2.75rem;
+		padding: 0 0.5rem;
+		border: 0;
+		border-radius: 0.5rem;
+		background: transparent;
+		color: var(--app-text);
+		font: inherit;
+		cursor: pointer;
+	}
+
+	.main-back-button:hover {
+		background: var(--app-control-hover);
+	}
+
+	.main-back-button:focus-visible {
+		outline: 2px solid var(--app-text-muted);
+		outline-offset: 2px;
+	}
+
+	.back-chevron {
+		display: inline-flex;
+		transform: rotate(180deg);
 	}
 
 	.resource-strip {
@@ -5774,9 +5837,21 @@
 
 	@media (max-width: 700px) {
 		.mobile-shell-link { display: block; margin: 0 0.75rem 0.5rem; }
-		.workspace.disk-page-open .panel { display: flex; }
-		.workspace.disk-page-open .sidebar { display: none; }
+		.workspace.main-view-open .panel {
+			display: flex;
+			position: absolute;
+			inset: 0;
+			z-index: 10;
+			background: var(--app-bg);
+			animation: open-main-view 180ms ease-out;
+		}
+		.workspace.main-view-open .sidebar { visibility: hidden; }
 		.mobile-disk-link { display: inline-flex; justify-self: start; margin: 0.5rem 0.75rem; }
+		.main-back-button { display: inline-flex; flex: none; }
+		.panel-header { flex-wrap: wrap; gap: 0.5rem; }
+		.panel-heading { flex: 1; flex-direction: row; align-items: center; min-width: 0; gap: 0.5rem; }
+		.panel-heading h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.resource-strip { order: 1; flex-basis: 100%; justify-content: flex-start; }
 		.panel {
 			display: none;
 		}
@@ -5793,6 +5868,15 @@
 		.sidebar-resizer {
 			display: none;
 		}
+	}
+
+	@keyframes open-main-view {
+		from { transform: translateX(100%); }
+		to { transform: translateX(0); }
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.workspace.main-view-open .panel { animation: none; }
 	}
 
 	@media (max-width: 640px) {

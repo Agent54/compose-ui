@@ -11,7 +11,6 @@
 	import {
 		composeServiceUrl,
 		isExpectedServiceStop,
-		isServiceRestarting,
 		servicePendingStatus,
 		serviceStateRank,
 		servicesCollection,
@@ -67,10 +66,8 @@
 		return entries.sort((left, right) => {
 			if (sortBy === 'status') {
 				return (
-					serviceStateRank(isServiceRestarting(left, activeActions) ? 'restarting' : left.state) -
-						serviceStateRank(
-							isServiceRestarting(right, activeActions) ? 'restarting' : right.state
-						) ||
+					serviceStateRank(left.state, servicePendingStatusLabel(left)) -
+						serviceStateRank(right.state, servicePendingStatusLabel(right)) ||
 					left.serviceName.localeCompare(right.serviceName) ||
 					left.containerName.localeCompare(right.containerName)
 				);
@@ -196,7 +193,7 @@
 					type="button"
 					aria-label={`Select ${service.serviceName}`}
 					oncontextmenu={(event) => onOpenContextMenu(event, project, service)}
-					onmousedown={(event) => {
+					onclick={(event) => {
 						if (!isPrimaryMouse(event)) return;
 						onContainerSelect(project.id, service.id);
 					}}
