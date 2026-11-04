@@ -187,21 +187,29 @@
 	let searchInput: HTMLInputElement | null = null;
 	let dragSidebarWidth = $state<number | null>(null);
 	let mainViewOpen = $state(browser && Boolean(parseSelectionHash(window.location.hash)));
-	let mainBackButton: HTMLButtonElement | undefined;
 	let sidebarReturnFocus: HTMLElement | null = null;
 
-	async function openMainView(projectView = true) {
+	function openMainView() {
 		if (!window.matchMedia('(max-width: 700px)').matches || mainViewOpen) return;
-		sidebarReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-		mainViewOpen = projectView;
-		await tick();
-		mainBackButton?.focus({ preventScroll: true });
+		mainViewOpen = true;
+		void focusMainView();
 	}
 
-	async function backToProjects() {
+	async function focusMainView() {
+		if (!window.matchMedia('(max-width: 700px)').matches) return;
+		sidebarReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		await tick();
+		document.getElementById('main-back-button')?.focus({ preventScroll: true });
+	}
+
+	function backToProjects() {
 		mainViewOpen = false;
 		contextMenu = null;
 		if (diskPageOpen) closeDiskUsage();
+		else void focusSidebar();
+	}
+
+	async function focusSidebar() {
 		await tick();
 		if (sidebarReturnFocus?.isConnected) sidebarReturnFocus.focus({ preventScroll: true });
 	}
@@ -373,12 +381,16 @@
 	let diskPageOpen = $state(browser && window.location.hash === '#disk-usage');
 	function openDiskUsage() {
 		if (diskPageOpen) return;
-		void openMainView(false);
+		if (!mainViewOpen) void focusMainView();
 		diskPageOpen = true;
 		window.history.pushState(null, '', '#disk-usage');
 	}
 	function closeDiskUsage() {
 		diskPageOpen = false;
+		if (window.matchMedia('(max-width: 700px)').matches) {
+			mainViewOpen = false;
+			void focusSidebar();
+		}
 		writeSelectionHash(selectedProjectId, selectedContainerId);
 		if (!selectedProjectId) window.history.replaceState(null, '', window.location.pathname + window.location.search);
 	}
@@ -3115,14 +3127,14 @@
 		diskPageOpen = false;
 		contextMenu = null;
 		selectProject(projectId);
-		void openMainView();
+		openMainView();
 	}
 
 	function handleContainerSelect(projectId: string, serviceId: string) {
 		diskPageOpen = false;
 		contextMenu = null;
 		selectContainer(projectId, serviceId);
-		void openMainView();
+		openMainView();
 	}
 
 	function isPrimaryMouse(event: MouseEvent) {
@@ -3585,11 +3597,11 @@
 		<header class="panel-header">
 			<div class="panel-heading">
 				<button
-					bind:this={mainBackButton}
+					id="main-back-button"
 					class="main-back-button"
 					type="button"
 					aria-label="Back to projects"
-					onclick={() => void backToProjects()}
+					onclick={backToProjects}
 				>
 					<span class="back-chevron"><Icon name="chevron" size={16} /></span>
 					<span>Back</span>
@@ -5852,6 +5864,12 @@
 		.panel-heading { flex: 1; flex-direction: row; align-items: center; min-width: 0; gap: 0.5rem; }
 		.panel-heading h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 		.resource-strip { order: 1; flex-basis: 100%; justify-content: flex-start; }
+		.content-grid { grid-template-columns: minmax(0, 1fr); }
+		.card { min-width: 0; }
+		.config-copy .row-title { overflow-wrap: anywhere; }
+		.service-log-header { flex-wrap: wrap; padding: 0 0.55rem 0.55rem; }
+		.service-log-button { flex-basis: 100%; }
+		.service-overview-actions { margin-left: auto; }
 		.panel {
 			display: none;
 		}
