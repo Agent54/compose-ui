@@ -3333,7 +3333,7 @@
 </script>
 
 <svelte:head>
-	<title>Compose Control</title>
+	<title>Servers - Compose Control</title>
 	<meta
 		name="description"
 		content="Minimal Docker Compose control surface with a compact extension-style shell."
