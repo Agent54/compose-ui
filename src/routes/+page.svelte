@@ -5889,7 +5889,7 @@
 			inset: 0;
 			z-index: 10;
 			background: var(--app-bg);
-			animation: open-main-view 180ms ease-out;
+			animation: open-main-view 100ms cubic-bezier(0.16, 1, 0.3, 1);
 		}
 		.workspace.main-view-open .sidebar { visibility: hidden; }
 		.mobile-monitor { display: flex; }
@@ -5924,7 +5924,7 @@
 	}
 
 	@keyframes open-main-view {
-		from { transform: translateX(100%); }
+		from { transform: translateX(12px); }
 		to { transform: translateX(0); }
 	}
 
