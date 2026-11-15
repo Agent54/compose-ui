@@ -7,6 +7,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import ProjectServicesList from '$lib/components/ProjectServicesList.svelte';
 	import ShellLink from '$lib/components/ShellLink.svelte';
+	import ResourceMonitor from '$lib/components/ResourceMonitor.svelte';
 	import { containerShellTarget, shellActionLabel } from '$lib/shell/launch';
 	import {
 		buildTitle,
@@ -2109,6 +2110,39 @@
 		];
 	}
 
+	function monitoringGroups() {
+		const groups = [];
+		if (runtimeStatus === null || runtimeStatus.hostResources) {
+			groups.push({ label: 'Host', metrics: hostMetrics() });
+		}
+		groups.push({ label: 'VM', metrics: vmMetrics() });
+		if (selectedProject) {
+			groups.push({
+				label: selectedResourceService ? 'Service' : 'Project',
+				metrics: selectedResourceMetrics()
+			});
+		}
+		const failures: ResourceMetric[] = [];
+		if (diskBuildFailure) {
+			failures.push({
+				label: 'Build out of disk space',
+				value: diskBuildFailure.build.targetName || diskBuildFailure.build.projectName,
+				tooltip: diskBuildFailure.message,
+				pressure: 'critical'
+			});
+		}
+		if (memoryBuildFailure) {
+			failures.push({
+				label: 'Build out of memory',
+				value: memoryBuildFailure.build.targetName || memoryBuildFailure.build.projectName,
+				tooltip: memoryBuildFailure.message,
+				pressure: 'critical'
+			});
+		}
+		if (failures.length) groups.push({ label: 'Builds', metrics: failures });
+		return groups;
+	}
+
 	function vmMetrics(): ResourceMetric[] {
 		const systemCandidates = recordCandidates(systemInfo, 'data', 'system', 'info', 'host');
 		const cpu = nestedNumberFromCandidates(systemCandidates, 'cpuPercent', 'CPUPercent', 'usage.cpuPercent', 'host.cpuPercent');
@@ -3398,11 +3432,11 @@
 					<Icon name="refresh" size={13} spinning={refreshing} />
 				</button>
 			</span>
+			<div class="mobile-monitor">
+				<ResourceMonitor groups={monitoringGroups()} />
+			</div>
 		</div>
 
-		<button class="resource-chip disk-link mobile-disk-link" type="button" onclick={openDiskUsage} aria-label="Open VM disk usage">
-			<span>VM DISK FREE</span><strong>{vmDiskMetrics(runtimeStatus?.vmResources, formatBytes)[0].value}</strong>
-		</button>
 		<div class="mobile-shell-link">
 			<ShellLink config={uiState} target={{ kind: 'vm' }} label="Open VM shell" />
 		</div>
@@ -5093,7 +5127,7 @@
 	.disk-link { border: 1px solid transparent; cursor: pointer; }
 	.disk-link:hover { border-color: var(--app-border-strong); background: var(--app-control-hover); }
 	.disk-link:focus-visible { outline: 2px solid #1d9bf0 !important; outline-offset: 3px; }
-	.mobile-disk-link { display: none; }
+	.mobile-monitor { display: none; }
 	.mobile-shell-link { display: none; }
 
 	.resource-chip strong {
@@ -5858,7 +5892,8 @@
 			animation: open-main-view 180ms ease-out;
 		}
 		.workspace.main-view-open .sidebar { visibility: hidden; }
-		.mobile-disk-link { display: inline-flex; justify-self: start; margin: 0.5rem 0.75rem; }
+		.mobile-monitor { display: flex; }
+		.sidebar-controls { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 		.main-back-button { display: inline-flex; flex: none; }
 		.panel-header { flex-wrap: wrap; gap: 0.5rem; }
 		.panel-heading { flex: 1; flex-direction: row; align-items: center; min-width: 0; gap: 0.5rem; }
@@ -5899,7 +5934,7 @@
 
 	@media (max-width: 640px) {
 		.sidebar-controls {
-			grid-template-columns: auto minmax(0, 1fr) auto;
+			grid-template-columns: auto minmax(0, 1fr) auto auto;
 			gap: 0.42rem;
 		}
 
