@@ -1,9 +1,14 @@
 <script lang="ts">
 	import { resourcePressure, type ResourcePressure } from '$lib/central/resource-state';
+	import Icon from './Icon.svelte';
 
 	let {
-		groups
+		groups,
+		refreshing,
+		onrefresh
 	}: {
+		refreshing: boolean;
+		onrefresh: () => void;
 		groups: Array<{
 			label: string;
 			metrics: Array<{
@@ -66,8 +71,10 @@
 >
 	<button
 		type="button"
-		aria-label={`Resource monitoring: ${pressure}`}
+		aria-label={`${refreshing ? 'Refreshing' : 'Refresh'} projects; resource status: ${pressure}`}
 		aria-describedby={uid}
+		aria-busy={refreshing}
+		aria-disabled={refreshing}
 		onpointerenter={() => {
 			dismissed = false;
 		}}
@@ -78,7 +85,7 @@
 			pinned = false;
 		}}
 		onpointerdown={(event) => {
-			if (event.button !== 0 || !event.isPrimary) return;
+			if (event.button !== 0 || !event.isPrimary || refreshing) return;
 			event.preventDefault();
 			event.currentTarget.focus();
 			if (pinned) dismiss();
@@ -87,17 +94,23 @@
 				pinned = true;
 				pressedAt = performance.now();
 			}
+			onrefresh();
 		}}
 		onclick={(event) => {
-			if (event.detail !== 0) return;
+			if (event.detail !== 0 || refreshing) return;
 			if (pinned) dismiss();
 			else {
 				dismissed = false;
 				pinned = true;
 			}
+			onrefresh();
 		}}
 	>
-		<span class="dot" data-pressure={pressure} aria-hidden="true"></span>
+		{#if refreshing}
+			<Icon name="refresh" size={13} spinning />
+		{:else}
+			<span class="dot" data-pressure={pressure} aria-hidden="true"></span>
+		{/if}
 	</button>
 	<div class="popover" id={uid} role="tooltip">
 		{#each groups as group (group.label)}
@@ -138,6 +151,7 @@
 		border: 0;
 		border-radius: 0.35rem;
 		background: transparent;
+		color: var(--app-text-muted);
 		cursor: pointer;
 	}
 	button:hover {

@@ -3421,7 +3421,7 @@
 				/>
 			</div>
 
-			<span class="tooltip-anchor" data-tooltip="Refresh projects">
+			<span class="tooltip-anchor desktop-refresh" data-tooltip="Refresh projects">
 				<button
 					class="refresh-button"
 					type="button"
@@ -3433,7 +3433,7 @@
 				</button>
 			</span>
 			<div class="mobile-monitor">
-				<ResourceMonitor groups={monitoringGroups()} />
+				<ResourceMonitor groups={monitoringGroups()} {refreshing} onrefresh={handleManualRefresh} />
 			</div>
 		</div>
 
@@ -3751,6 +3751,9 @@
 					{/if}
 				</span>
 			</button>
+			<div class="mobile-monitor">
+				<ResourceMonitor groups={monitoringGroups()} {refreshing} onrefresh={handleManualRefresh} />
+			</div>
 		</header>
 		<RuntimeMemoryWarning runtime={runtimeStatus} />
 		<RuntimeCachePressureWarning warning={runtimeStatus?.cachePressureWarning} />
@@ -5893,12 +5896,12 @@
 		}
 		.workspace.main-view-open .sidebar { visibility: hidden; }
 		.mobile-monitor { display: flex; }
-		.sidebar-controls { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+		.desktop-refresh { display: none; }
 		.main-back-button { display: inline-flex; flex: none; }
 		.panel-header { flex-wrap: wrap; gap: 0.5rem; }
 		.panel-heading { flex: 1; flex-direction: row; align-items: center; min-width: 0; gap: 0.5rem; }
 		.panel-heading h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-		.resource-strip { order: 1; flex-basis: 100%; justify-content: flex-start; }
+		.resource-strip { display: none; }
 		.content-grid { grid-template-columns: minmax(0, 1fr); }
 		.card { min-width: 0; }
 		.config-copy .row-title { overflow-wrap: anywhere; }
@@ -5934,7 +5937,7 @@
 
 	@media (max-width: 640px) {
 		.sidebar-controls {
-			grid-template-columns: auto minmax(0, 1fr) auto auto;
+			grid-template-columns: auto minmax(0, 1fr) auto;
 			gap: 0.42rem;
 		}
 
